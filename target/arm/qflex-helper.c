@@ -25,6 +25,7 @@
  */
 void HELPER(qflex_hit_ldst)(CPUARMState* env, uint64_t addr, int isStore) {
     qflex_log_mask(QFLEX_LOG_LDST, "   LDST:0x%016lx\n", addr);
+    qflex_cache_model(addr);
 }
 
 /**
@@ -49,6 +50,7 @@ void HELPER(qflex_executed_instruction)(CPUARMState* env, uint64_t pc, int flags
         break;
     default: break;
     }
+    qflex_cache_model(pc)
 }
 
 void HELPER(qflex_profile)(CPUARMState* env, uint64_t pc, int flags, int l1h, int l2h, int ldst) {

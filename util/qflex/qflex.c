@@ -20,6 +20,7 @@
 
 #include "qflex/qflex.h"
 #include "qflex/qflex-profiling.h"
+#include "qflex/qflex-models.h"
 
 #ifdef CONFIG_FA_QFLEX
 #include "qflex/fa-qflex.h"
@@ -40,6 +41,8 @@ void qflex_api_values_init(CPUState *cpu) {
 
     qflexPth.iloop = 0;
     qflexPth.iexit = 0;
+
+    qflex_models_init();
 }
 
 void qflex_configure(QemuOpts *opts, Error **errp) {
