@@ -1,47 +1,3 @@
-//  DO-NOT-REMOVE begin-copyright-block
-// QFlex consists of several software components that are governed by various
-// licensing terms, in addition to software that was developed internally.
-// Anyone interested in using QFlex needs to fully understand and abide by the
-// licenses governing all the software components.
-// 
-// ### Software developed externally (not by the QFlex group)
-// 
-//     * [NS-3] (https://www.gnu.org/copyleft/gpl.html)
-//     * [QEMU] (http://wiki.qemu.org/License)
-//     * [SimFlex] (http://parsa.epfl.ch/simflex/)
-//     * [GNU PTH] (https://www.gnu.org/software/pth/)
-// 
-// ### Software developed internally (by the QFlex group)
-// **QFlex License**
-// 
-// QFlex
-// Copyright (c) 2020, Parallel Systems Architecture Lab, EPFL
-// All rights reserved.
-// 
-// Redistribution and use in source and binary forms, with or without modification,
-// are permitted provided that the following conditions are met:
-// 
-//     * Redistributions of source code must retain the above copyright notice,
-//       this list of conditions and the following disclaimer.
-//     * Redistributions in binary form must reproduce the above copyright notice,
-//       this list of conditions and the following disclaimer in the documentation
-//       and/or other materials provided with the distribution.
-//     * Neither the name of the Parallel Systems Architecture Laboratory, EPFL,
-//       nor the names of its contributors may be used to endorse or promote
-//       products derived from this software without specific prior written
-//       permission.
-// 
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
-// ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
-// WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-// DISCLAIMED. IN NO EVENT SHALL THE PARALLEL SYSTEMS ARCHITECTURE LABORATORY,
-// EPFL BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
-// GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
-// HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
-// LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
-// THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-//  DO-NOT-REMOVE end-copyright-block
 /*
  * urcu-mb.c
  *
@@ -105,9 +61,7 @@ static inline int rcu_gp_ongoing(unsigned long *ctr)
 /* Written to only by each individual reader. Read by both the reader and the
  * writers.
  */
-#ifndef CONFIG_PTH
 __thread struct rcu_reader_data rcu_reader;
-#endif
 
 /* Protected by rcu_registry_lock.  */
 typedef QLIST_HEAD(, rcu_reader_data) ThreadList;
@@ -219,11 +173,7 @@ void synchronize_rcu(void)
  * from liburcu.  Note that head is only used by the consumer.
  */
 static struct rcu_head dummy;
-#ifndef CONFIG_PTH
 static struct rcu_head *head = &dummy, **tail = &dummy.next;
-#else
-static struct rcu_head **tail = &dummy.next;
-#endif
 static int rcu_call_count;
 static QemuEvent rcu_call_ready_event;
 
@@ -235,7 +185,7 @@ static void enqueue(struct rcu_head *node)
     old_tail = atomic_xchg(&tail, &node->next);
     atomic_mb_set(old_tail, node);
 }
-#ifndef CONFIG_PTH
+
 static struct rcu_head *try_dequeue(void)
 {
     struct rcu_head *node, *next;
@@ -325,7 +275,6 @@ static void *call_rcu_thread(void *opaque)
     }
     abort();
 }
-#endif
 
 void call_rcu1(struct rcu_head *node, void (*func)(struct rcu_head *node))
 {
@@ -337,22 +286,19 @@ void call_rcu1(struct rcu_head *node, void (*func)(struct rcu_head *node))
 
 void rcu_register_thread(void)
 {
-    PTH_UPDATE_CONTEXT
-
-    assert(PTH(rcu_reader).ctr == 0);
+    assert(rcu_reader.ctr == 0);
     qemu_mutex_lock(&rcu_registry_lock);
-    QLIST_INSERT_HEAD(&registry, &PTH(rcu_reader), node);
+    QLIST_INSERT_HEAD(&registry, &rcu_reader, node);
     qemu_mutex_unlock(&rcu_registry_lock);
 }
 
 void rcu_unregister_thread(void)
 {
-    PTH_UPDATE_CONTEXT
     qemu_mutex_lock(&rcu_registry_lock);
-    QLIST_REMOVE(&PTH(rcu_reader), node);
+    QLIST_REMOVE(&rcu_reader, node);
     qemu_mutex_unlock(&rcu_registry_lock);
 }
-#ifndef CONFIG_PTH
+
 static void rcu_init_complete(void)
 {
     QemuThread thread;
@@ -371,7 +317,6 @@ static void rcu_init_complete(void)
 
     rcu_register_thread();
 }
-#endif
 
 static int atfork_depth = 1;
 
@@ -385,7 +330,7 @@ void rcu_disable_atfork(void)
     atfork_depth--;
 }
 
-#if defined(CONFIG_POSIX) && !defined(CONFIG_PTH)
+#ifdef CONFIG_POSIX
 static void rcu_init_lock(void)
 {
     if (atfork_depth < 1) {
@@ -415,13 +360,12 @@ static void rcu_init_child(void)
     memset(&registry, 0, sizeof(registry));
     rcu_init_complete();
 }
-
+#endif
 
 static void __attribute__((__constructor__)) rcu_init(void)
 {
-#if defined(CONFIG_POSIX)
+#ifdef CONFIG_POSIX
     pthread_atfork(rcu_init_lock, rcu_init_unlock, rcu_init_child);
 #endif
     rcu_init_complete();
 }
-#endif

@@ -1,47 +1,3 @@
-//  DO-NOT-REMOVE begin-copyright-block
-// QFlex consists of several software components that are governed by various
-// licensing terms, in addition to software that was developed internally.
-// Anyone interested in using QFlex needs to fully understand and abide by the
-// licenses governing all the software components.
-// 
-// ### Software developed externally (not by the QFlex group)
-// 
-//     * [NS-3] (https://www.gnu.org/copyleft/gpl.html)
-//     * [QEMU] (http://wiki.qemu.org/License)
-//     * [SimFlex] (http://parsa.epfl.ch/simflex/)
-//     * [GNU PTH] (https://www.gnu.org/software/pth/)
-// 
-// ### Software developed internally (by the QFlex group)
-// **QFlex License**
-// 
-// QFlex
-// Copyright (c) 2020, Parallel Systems Architecture Lab, EPFL
-// All rights reserved.
-// 
-// Redistribution and use in source and binary forms, with or without modification,
-// are permitted provided that the following conditions are met:
-// 
-//     * Redistributions of source code must retain the above copyright notice,
-//       this list of conditions and the following disclaimer.
-//     * Redistributions in binary form must reproduce the above copyright notice,
-//       this list of conditions and the following disclaimer in the documentation
-//       and/or other materials provided with the distribution.
-//     * Neither the name of the Parallel Systems Architecture Laboratory, EPFL,
-//       nor the names of its contributors may be used to endorse or promote
-//       products derived from this software without specific prior written
-//       permission.
-// 
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
-// ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
-// WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-// DISCLAIMED. IN NO EVENT SHALL THE PARALLEL SYSTEMS ARCHITECTURE LABORATORY,
-// EPFL BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
-// GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
-// HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
-// LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
-// THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-//  DO-NOT-REMOVE end-copyright-block
 /*
  *  Copyright (C) 2016-2017 Red Hat, Inc.
  *  Copyright (C) 2005  Anthony Liguori <anthony@codemonkey.ws>
@@ -193,10 +149,10 @@ static int nbd_receive_option_reply(QIOChannel *ioc, uint32_t opt,
         nbd_send_opt_abort(ioc);
         return -1;
     }
-    reply->magic = be64_to_cpu(reply->magic);
-    reply->option = be32_to_cpu(reply->option);
-    reply->type = be32_to_cpu(reply->type);
-    reply->length = be32_to_cpu(reply->length);
+    be64_to_cpus(&reply->magic);
+    be32_to_cpus(&reply->option);
+    be32_to_cpus(&reply->type);
+    be32_to_cpus(&reply->length);
 
     trace_nbd_receive_option_reply(reply->option, nbd_opt_lookup(reply->option),
                                    reply->type, nbd_rep_lookup(reply->type),
@@ -471,7 +427,7 @@ static int nbd_opt_go(QIOChannel *ioc, const char *wantname,
             return -1;
         }
         len -= sizeof(type);
-        type = be16_to_cpu(type);
+        be16_to_cpus(&type);
         switch (type) {
         case NBD_INFO_EXPORT:
             if (len != sizeof(info->size) + sizeof(info->flags)) {
@@ -485,13 +441,13 @@ static int nbd_opt_go(QIOChannel *ioc, const char *wantname,
                 nbd_send_opt_abort(ioc);
                 return -1;
             }
-            info->size = be64_to_cpu(info->size);
+            be64_to_cpus(&info->size);
             if (nbd_read(ioc, &info->flags, sizeof(info->flags), errp) < 0) {
                 error_prepend(errp, "failed to read info flags");
                 nbd_send_opt_abort(ioc);
                 return -1;
             }
-            info->flags = be16_to_cpu(info->flags);
+            be16_to_cpus(&info->flags);
             trace_nbd_receive_negotiate_size_flags(info->size, info->flags);
             break;
 
@@ -508,7 +464,7 @@ static int nbd_opt_go(QIOChannel *ioc, const char *wantname,
                 nbd_send_opt_abort(ioc);
                 return -1;
             }
-            info->min_block = be32_to_cpu(info->min_block);
+            be32_to_cpus(&info->min_block);
             if (!is_power_of_2(info->min_block)) {
                 error_setg(errp, "server minimum block size %" PRId32
                            "is not a power of two", info->min_block);
@@ -521,7 +477,7 @@ static int nbd_opt_go(QIOChannel *ioc, const char *wantname,
                 nbd_send_opt_abort(ioc);
                 return -1;
             }
-            info->opt_block = be32_to_cpu(info->opt_block);
+            be32_to_cpus(&info->opt_block);
             if (!is_power_of_2(info->opt_block) ||
                 info->opt_block < info->min_block) {
                 error_setg(errp, "server preferred block size %" PRId32
@@ -535,7 +491,7 @@ static int nbd_opt_go(QIOChannel *ioc, const char *wantname,
                 nbd_send_opt_abort(ioc);
                 return -1;
             }
-            info->max_block = be32_to_cpu(info->max_block);
+            be32_to_cpus(&info->max_block);
             trace_nbd_opt_go_info_block_size(info->min_block, info->opt_block,
                                              info->max_block);
             break;
@@ -768,13 +724,13 @@ int nbd_receive_negotiate(QIOChannel *ioc, const char *name,
             error_prepend(errp, "Failed to read export length");
             goto fail;
         }
-        info->size = be64_to_cpu(info->size);
+        be64_to_cpus(&info->size);
 
         if (nbd_read(ioc, &info->flags, sizeof(info->flags), errp) < 0) {
             error_prepend(errp, "Failed to read export flags");
             goto fail;
         }
-        info->flags = be16_to_cpu(info->flags);
+        be16_to_cpus(&info->flags);
     } else if (magic == NBD_CLIENT_MAGIC) {
         uint32_t oldflags;
 
@@ -791,13 +747,13 @@ int nbd_receive_negotiate(QIOChannel *ioc, const char *name,
             error_prepend(errp, "Failed to read export length");
             goto fail;
         }
-        info->size = be64_to_cpu(info->size);
+        be64_to_cpus(&info->size);
 
         if (nbd_read(ioc, &oldflags, sizeof(oldflags), errp) < 0) {
             error_prepend(errp, "Failed to read export flags");
             goto fail;
         }
-        oldflags = be32_to_cpu(oldflags);
+        be32_to_cpus(&oldflags);
         if (oldflags & ~0xffff) {
             error_setg(errp, "Unexpected export flags %0x" PRIx32, oldflags);
             goto fail;

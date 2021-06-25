@@ -1,47 +1,3 @@
-//  DO-NOT-REMOVE begin-copyright-block
-// QFlex consists of several software components that are governed by various
-// licensing terms, in addition to software that was developed internally.
-// Anyone interested in using QFlex needs to fully understand and abide by the
-// licenses governing all the software components.
-// 
-// ### Software developed externally (not by the QFlex group)
-// 
-//     * [NS-3] (https://www.gnu.org/copyleft/gpl.html)
-//     * [QEMU] (http://wiki.qemu.org/License)
-//     * [SimFlex] (http://parsa.epfl.ch/simflex/)
-//     * [GNU PTH] (https://www.gnu.org/software/pth/)
-// 
-// ### Software developed internally (by the QFlex group)
-// **QFlex License**
-// 
-// QFlex
-// Copyright (c) 2020, Parallel Systems Architecture Lab, EPFL
-// All rights reserved.
-// 
-// Redistribution and use in source and binary forms, with or without modification,
-// are permitted provided that the following conditions are met:
-// 
-//     * Redistributions of source code must retain the above copyright notice,
-//       this list of conditions and the following disclaimer.
-//     * Redistributions in binary form must reproduce the above copyright notice,
-//       this list of conditions and the following disclaimer in the documentation
-//       and/or other materials provided with the distribution.
-//     * Neither the name of the Parallel Systems Architecture Laboratory, EPFL,
-//       nor the names of its contributors may be used to endorse or promote
-//       products derived from this software without specific prior written
-//       permission.
-// 
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
-// ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
-// WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-// DISCLAIMED. IN NO EVENT SHALL THE PARALLEL SYSTEMS ARCHITECTURE LABORATORY,
-// EPFL BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
-// GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
-// HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
-// LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
-// THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-//  DO-NOT-REMOVE end-copyright-block
 /*
  *  Host code generation
  *
@@ -121,8 +77,7 @@
  * mmap_lock.
  */
 #ifdef CONFIG_SOFTMMU
-#define assert_memory_lock() \
-    tcg_debug_assert(PTH(have_tb_lock))
+#define assert_memory_lock() tcg_debug_assert(have_tb_lock)
 #else
 #define assert_memory_lock() tcg_debug_assert(have_mmap_lock())
 #endif
@@ -184,9 +139,7 @@ TCGContext tcg_ctx;
 bool parallel_cpus;
 
 /* translation block context */
-#ifndef CONFIG_PTH
 __thread int have_tb_lock;
-#endif
 
 static void page_table_config_init(void)
 {
@@ -207,34 +160,29 @@ static void page_table_config_init(void)
     assert(v_l1_shift % V_L2_BITS == 0);
     assert(v_l2_levels >= 0);
 }
-#define assert_tb_locked() \
-        tcg_debug_assert(PTH(have_tb_lock))
 
-#define assert_tb_unlocked() \
-        tcg_debug_assert(!PTH(have_tb_lock))
+#define assert_tb_locked() tcg_debug_assert(have_tb_lock)
+#define assert_tb_unlocked() tcg_debug_assert(!have_tb_lock)
 
 void tb_lock(void)
 {
-    PTH_UPDATE_CONTEXT
     assert_tb_unlocked();
     qemu_mutex_lock(&tcg_ctx.tb_ctx.tb_lock);
-    PTH(have_tb_lock)++;
+    have_tb_lock++;
 }
 
 void tb_unlock(void)
 {
-    PTH_UPDATE_CONTEXT
     assert_tb_locked();
-    PTH(have_tb_lock)--;
+    have_tb_lock--;
     qemu_mutex_unlock(&tcg_ctx.tb_ctx.tb_lock);
 }
 
 void tb_lock_reset(void)
 {
-    PTH_UPDATE_CONTEXT
-    if (PTH(have_tb_lock)) {
+    if (have_tb_lock) {
         qemu_mutex_unlock(&tcg_ctx.tb_ctx.tb_lock);
-        PTH(have_tb_lock) = 0;
+        have_tb_lock = 0;
     }
 }
 
@@ -495,7 +443,6 @@ static void page_init(void)
  */
 static PageDesc *page_find_alloc(tb_page_addr_t index, int alloc)
 {
-    PTH_UPDATE_CONTEXT
     PageDesc *pd;
     void **lp;
     int i;
@@ -863,7 +810,6 @@ void tcg_exec_init(unsigned long tb_size)
  */
 static TranslationBlock *tb_alloc(target_ulong pc)
 {
-    PTH_UPDATE_CONTEXT
     TranslationBlock *tb;
     TBContext *ctx;
 
@@ -885,7 +831,6 @@ static TranslationBlock *tb_alloc(target_ulong pc)
 /* Called with tb_lock held.  */
 void tb_free(TranslationBlock *tb)
 {
-    PTH_UPDATE_CONTEXT
     assert_tb_locked();
 
     /* In practice this is mostly used for single use temporary TB
@@ -1121,7 +1066,6 @@ static inline void tb_jmp_unlink(TranslationBlock *tb)
  */
 void tb_phys_invalidate(TranslationBlock *tb, tb_page_addr_t page_addr)
 {
-    PTH_UPDATE_CONTEXT
     CPUState *cpu;
     PageDesc *p;
     uint32_t h;
@@ -1204,7 +1148,6 @@ static void build_page_bitmap(PageDesc *p)
 static inline void tb_alloc_page(TranslationBlock *tb,
                                  unsigned int n, tb_page_addr_t page_addr)
 {
-    PTH_UPDATE_CONTEXT
     PageDesc *p;
 #ifndef CONFIG_USER_ONLY
     bool page_already_protected;
@@ -1266,7 +1209,6 @@ static inline void tb_alloc_page(TranslationBlock *tb,
 static void tb_link_page(TranslationBlock *tb, tb_page_addr_t phys_pc,
                          tb_page_addr_t phys_page2)
 {
-    PTH_UPDATE_CONTEXT
     uint32_t h;
 
     assert_memory_lock();
@@ -1293,7 +1235,6 @@ TranslationBlock *tb_gen_code(CPUState *cpu,
                               target_ulong pc, target_ulong cs_base,
                               uint32_t flags, int cflags)
 {
-    PTH_UPDATE_CONTEXT
     CPUArchState *env = cpu->env_ptr;
     TranslationBlock *tb;
     tb_page_addr_t phys_pc, phys_page2;
@@ -1470,7 +1411,6 @@ static void tb_invalidate_phys_range_1(tb_page_addr_t start, tb_page_addr_t end)
 #ifdef CONFIG_SOFTMMU
 void tb_invalidate_phys_range(tb_page_addr_t start, tb_page_addr_t end)
 {
-    PTH_UPDATE_CONTEXT
     assert_tb_locked();
     tb_invalidate_phys_range_1(start, end);
 }
@@ -1496,7 +1436,6 @@ void tb_invalidate_phys_range(tb_page_addr_t start, tb_page_addr_t end)
 void tb_invalidate_phys_page_range(tb_page_addr_t start, tb_page_addr_t end,
                                    int is_cpu_write_access)
 {
-    PTH_UPDATE_CONTEXT
     TranslationBlock *tb, *tb_next;
 #if defined(TARGET_HAS_PRECISE_SMC)
     CPUState *cpu = current_cpu;
@@ -1598,7 +1537,6 @@ void tb_invalidate_phys_page_range(tb_page_addr_t start, tb_page_addr_t end,
  */
 void tb_invalidate_phys_page_fast(tb_page_addr_t start, int len)
 {
-    PTH_UPDATE_CONTEXT
     PageDesc *p;
 
 #if 0

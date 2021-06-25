@@ -3667,100 +3667,6 @@ Don't exit QEMU on guest shutdown, but instead only stop the emulation.
 This allows for instance switching to monitor to commit changes to the
 disk image.
 ETEXI
-#ifdef CONFIG_EXTSNAP
-DEF("loadext", HAS_ARG, QEMU_OPTION_loadext, \
-    "-loadext [tag|id]\n" \
-    "                start right away with a externally saved state (loadvm-ext in monitor)\n",
-    QEMU_ARCH_ALL)
-STEXI
-@item -loadext @var{file}
-@findex -loadext
-Start right away with a externally saved state (@code{loadvm-ext} in monitor)
-ETEXI
-
-DEF("exton", 0, QEMU_OPTION_exton, \
-    "-exton      use external snapshots subsystem\n", QEMU_ARCH_ALL)
-STEXI
-@item -exton
-@findex -exton
-Use the external snapshot subsystem.
-ETEXI
-#endif //CONFIG_EXTSNAP
-#ifdef CONFIG_QUANTUM
-DEF("quantum", HAS_ARG, QEMU_OPTION_quantum,"aaa", QEMU_ARCH_ALL)
-STEXI
-@item -quantum [core=@var{N}][,record=@var{V}][,step=@var{S}][,file=@var{F}][,node=@var{C}]
-@findex -quantum
-Specify the number of instructions to execute per vcpu in each iteration.
-ETEXI
-#endif
-
-#ifdef CONFIG_FLEXUS
-
-DEF("flexus", HAS_ARG, QEMU_OPTION_flexus,"-flexus [mode=@var{N}][,length=@var{V}][,simulator=@var{S}][,config=@var{C}]", QEMU_ARCH_ALL)
-STEXI
-@item -flexus [mode=@var{N}][,length=@var{V}][,simulator=@var{S}][,config=@var{C}][,debug=@var{d}]
-@findex -flexus
-run flexus in timing or trace mode with given duration and simulator
-ETEXI
-
-
-
-
-DEF("simpath", HAS_ARG, QEMU_OPTION_simpath, \
-        "-simpath <path>    specify the path to the simulator to load\n",
-        QEMU_ARCH_ALL)
-STEXI
-@item -simpath @var{path}
-@findex -simpath
-Specify the simulator to use"
-ETEXI
-
-DEF("timing", 0, QEMU_OPTION_timing, \
-        "-timing    use for timing simulation w/ Flexus\n",
-        QEMU_ARCH_ALL)
-STEXI
-@item -timing
-@findex -timing
-use QEMU w/ Flexus for timing simulation\n"
-ETEXI
-
-DEF("startsimulation", 0, QEMU_OPTION_startsimulation, \
-        "-startsimulation    use that flag to start simulation at boot\n",
-        QEMU_ARCH_ALL)
-STEXI
-@item -startsimulation
-@findex -startsimulation
-use that flag to start simulation at boot\n"
-ETEXI
-
-DEF("simulatefor", HAS_ARG, QEMU_OPTION_simulatefor, \
-        "-simulatefor <num> specify the number of instructions to execute during the simulation before exiting.\n",
-        QEMU_ARCH_ALL)
-STEXI
-@item -simulatefor @var{num}
-@findex -simulatefor
-Specify the number of instructions to execute during the simulation, then exits. Must be used in conjunction with
-the @code{-startsimulation} option, or the simulation must be trigerred by magic instructions or another way.
-ETEXI
-
-DEF("phases", HAS_ARG, QEMU_OPTION_phases, \
-        "-phases [steps=@var{V}][,name=@var{E}]\n",
-        QEMU_ARCH_ALL)
-STEXI
-@item -phases [steps=@var{V}][,name=@var{E}]
-@findex -phases
-specify the values for phase generation. also optionally specify a name for prefixing the phases.
-ETEXI
-
-DEF("ckpt", HAS_ARG, QEMU_OPTION_ckpt,"aaa", QEMU_ARCH_ALL)
-STEXI
-@item -ckpt [every=@var{V}][,end=@var{E}]
-@findex -ckpt
-specify the checkpoint intervals @var{V} and an interuction for end @var{E}
-ETEXI
-
-#endif
 
 DEF("loadvm", HAS_ARG, QEMU_OPTION_loadvm, \
     "-loadvm [tag|id]\n" \
@@ -4555,16 +4461,6 @@ contents of @code{iv.b64} to the second secret
 
 ETEXI
 
-#ifdef CONFIG_FLEXUS
-DEF("qflex_d", HAS_ARG, QEMU_OPTION_qflex_d, \
-    "-qflex_d item1,...    enable logging of specified items (use '-d help' for a list of log items)\n",
-    QEMU_ARCH_ALL)
-STEXI
-@item -qflex_d @var{item1}[,...]
-@findex -qflex_d
-Enable logging of specified items.
-ETEXI
-#endif
 
 HXCOMM This is the last statement. Insert new options before this line!
 STEXI

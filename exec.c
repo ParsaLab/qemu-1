@@ -1,47 +1,3 @@
-//  DO-NOT-REMOVE begin-copyright-block
-// QFlex consists of several software components that are governed by various
-// licensing terms, in addition to software that was developed internally.
-// Anyone interested in using QFlex needs to fully understand and abide by the
-// licenses governing all the software components.
-// 
-// ### Software developed externally (not by the QFlex group)
-// 
-//     * [NS-3] (https://www.gnu.org/copyleft/gpl.html)
-//     * [QEMU] (http://wiki.qemu.org/License)
-//     * [SimFlex] (http://parsa.epfl.ch/simflex/)
-//     * [GNU PTH] (https://www.gnu.org/software/pth/)
-// 
-// ### Software developed internally (by the QFlex group)
-// **QFlex License**
-// 
-// QFlex
-// Copyright (c) 2020, Parallel Systems Architecture Lab, EPFL
-// All rights reserved.
-// 
-// Redistribution and use in source and binary forms, with or without modification,
-// are permitted provided that the following conditions are met:
-// 
-//     * Redistributions of source code must retain the above copyright notice,
-//       this list of conditions and the following disclaimer.
-//     * Redistributions in binary form must reproduce the above copyright notice,
-//       this list of conditions and the following disclaimer in the documentation
-//       and/or other materials provided with the distribution.
-//     * Neither the name of the Parallel Systems Architecture Laboratory, EPFL,
-//       nor the names of its contributors may be used to endorse or promote
-//       products derived from this software without specific prior written
-//       permission.
-// 
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
-// ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
-// WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-// DISCLAIMED. IN NO EVENT SHALL THE PARALLEL SYSTEMS ARCHITECTURE LABORATORY,
-// EPFL BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
-// GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
-// HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
-// LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
-// THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-//  DO-NOT-REMOVE end-copyright-block
 /*
  *  Virtual page mapping
  *
@@ -156,9 +112,7 @@ bool target_page_bits_decided;
 struct CPUTailQ cpus = QTAILQ_HEAD_INITIALIZER(cpus);
 /* current CPU in the current thread. It is only valid inside
    cpu_exec() */
-#ifndef CONFIG_PTH
 __thread CPUState *current_cpu;
-#endif
 /* 0 = Do not count executed instructions.
    1 = Precise instruction counting.
    2 = Adaptive rate instruction counting.  */
@@ -720,7 +674,7 @@ const VMStateDescription vmstate_cpu_common = {
 
 #endif
 
-CPUState * qemu_get_cpu(int index)
+CPUState *qemu_get_cpu(int index)
 {
     CPUState *cpu;
 
@@ -2378,7 +2332,6 @@ ram_addr_t qemu_ram_addr_from_host(void *ptr)
 static void notdirty_mem_write(void *opaque, hwaddr ram_addr,
                                uint64_t val, unsigned size)
 {
-    PTH_UPDATE_CONTEXT
     bool locked = false;
 
     assert(tcg_enabled());
@@ -2413,7 +2366,7 @@ static void notdirty_mem_write(void *opaque, hwaddr ram_addr,
     /* we remove the notdirty callback only if the code has been
        flushed */
     if (!cpu_physical_memory_is_clean(ram_addr)) {
-        tlb_set_dirty(PTH(current_cpu), PTH(current_cpu)->mem_io_vaddr);
+        tlb_set_dirty(current_cpu, current_cpu->mem_io_vaddr);
     }
 }
 
@@ -2432,8 +2385,7 @@ static const MemoryRegionOps notdirty_mem_ops = {
 /* Generate a debug exception if a watchpoint has been hit.  */
 static void check_watchpoint(int offset, int len, MemTxAttrs attrs, int flags)
 {
-    PTH_UPDATE_CONTEXT
-    CPUState *cpu = PTH(current_cpu);
+    CPUState *cpu = current_cpu;
     CPUClass *cc = CPU_GET_CLASS(cpu);
     CPUArchState *env = cpu->env_ptr;
     target_ulong pc, cs_base;
@@ -2496,11 +2448,10 @@ static void check_watchpoint(int offset, int len, MemTxAttrs attrs, int flags)
 static MemTxResult watch_mem_read(void *opaque, hwaddr addr, uint64_t *pdata,
                                   unsigned size, MemTxAttrs attrs)
 {
-    PTH_UPDATE_CONTEXT
     MemTxResult res;
     uint64_t data;
-    int asidx = cpu_asidx_from_attrs(PTH(current_cpu), attrs);
-    AddressSpace *as = PTH(current_cpu)->cpu_ases[asidx].as;
+    int asidx = cpu_asidx_from_attrs(current_cpu, attrs);
+    AddressSpace *as = current_cpu->cpu_ases[asidx].as;
 
     check_watchpoint(addr & ~TARGET_PAGE_MASK, size, attrs, BP_MEM_READ);
     switch (size) {
@@ -2523,10 +2474,9 @@ static MemTxResult watch_mem_write(void *opaque, hwaddr addr,
                                    uint64_t val, unsigned size,
                                    MemTxAttrs attrs)
 {
-    PTH_UPDATE_CONTEXT
     MemTxResult res;
-    int asidx = cpu_asidx_from_attrs(PTH(current_cpu), attrs);
-    AddressSpace *as = PTH(current_cpu)->cpu_ases[asidx].as;
+    int asidx = cpu_asidx_from_attrs(current_cpu, attrs);
+    AddressSpace *as = current_cpu->cpu_ases[asidx].as;
 
     check_watchpoint(addr & ~TARGET_PAGE_MASK, size, attrs, BP_MEM_WRITE);
     switch (size) {

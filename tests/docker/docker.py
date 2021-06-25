@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python2
 #
 # Docker controlling module
 #
@@ -10,8 +10,6 @@
 # This work is licensed under the terms of the GNU GPL, version 2
 # or (at your option) any later version. See the COPYING file in
 # the top-level directory.
-
-from __future__ import print_function
 
 import os
 import sys
@@ -27,11 +25,7 @@ import tempfile
 import re
 import signal
 from tarfile import TarFile, TarInfo
-try:
-    from io import StringIO
-except ImportError:
-    # Python2 fallback
-    from StringIO import StringIO
+from StringIO import StringIO
 from shutil import copy, rmtree
 from pwd import getpwuid
 
@@ -93,7 +87,7 @@ def _get_so_libs(executable):
                 so_lib = search.groups()[1]
                 libs.append("%s/%s" % (so_path, so_lib))
     except subprocess.CalledProcessError:
-        print("%s had no associated libraries (static build?)" % (executable))
+        print "%s had no associated libraries (static build?)" % (executable)
 
     return libs
 
@@ -145,7 +139,7 @@ class Docker(object):
                 continue
             if only_known and instance_uuid not in self._instances:
                 continue
-            print("Terminating", i)
+            print "Terminating", i
             if active:
                 self._do(["kill", i])
             self._do(["rm", i])
@@ -272,7 +266,7 @@ class BuildCommand(SubCommand):
         if "--no-cache" not in argv and \
            dkr.image_matches_dockerfile(tag, dockerfile):
             if not args.quiet:
-                print("Image is up to date.")
+                print "Image is up to date."
         else:
             # Create a docker context directory for the build
             docker_dir = tempfile.mkdtemp(prefix="docker_build")
@@ -284,10 +278,10 @@ class BuildCommand(SubCommand):
                 rc = subprocess.call(os.path.realpath(docker_pre),
                                      cwd=docker_dir, stdout=stdout)
                 if rc == 3:
-                    print("Skip")
+                    print "Skip"
                     return 0
                 elif rc != 0:
-                    print("%s exited with code %d" % (docker_pre, rc))
+                    print "%s exited with code %d" % (docker_pre, rc)
                     return 1
 
             # Copy any extra files into the Docker context. These can be
@@ -303,7 +297,7 @@ class BuildCommand(SubCommand):
                 cksum += [_file_checksum(filename)]
 
             argv += ["--build-arg=" + k.lower() + "=" + v
-                        for k, v in os.environ.items()
+                        for k, v in os.environ.iteritems()
                         if k.lower() in FILTERED_ENV_NAMES]
             dkr.build_image(tag, docker_dir, dockerfile,
                             quiet=args.quiet, user=args.user, argv=argv,

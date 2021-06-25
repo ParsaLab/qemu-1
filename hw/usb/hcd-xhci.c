@@ -1,47 +1,3 @@
-//  DO-NOT-REMOVE begin-copyright-block
-// QFlex consists of several software components that are governed by various
-// licensing terms, in addition to software that was developed internally.
-// Anyone interested in using QFlex needs to fully understand and abide by the
-// licenses governing all the software components.
-// 
-// ### Software developed externally (not by the QFlex group)
-// 
-//     * [NS-3] (https://www.gnu.org/copyleft/gpl.html)
-//     * [QEMU] (http://wiki.qemu.org/License)
-//     * [SimFlex] (http://parsa.epfl.ch/simflex/)
-//     * [GNU PTH] (https://www.gnu.org/software/pth/)
-// 
-// ### Software developed internally (by the QFlex group)
-// **QFlex License**
-// 
-// QFlex
-// Copyright (c) 2020, Parallel Systems Architecture Lab, EPFL
-// All rights reserved.
-// 
-// Redistribution and use in source and binary forms, with or without modification,
-// are permitted provided that the following conditions are met:
-// 
-//     * Redistributions of source code must retain the above copyright notice,
-//       this list of conditions and the following disclaimer.
-//     * Redistributions in binary form must reproduce the above copyright notice,
-//       this list of conditions and the following disclaimer in the documentation
-//       and/or other materials provided with the distribution.
-//     * Neither the name of the Parallel Systems Architecture Laboratory, EPFL,
-//       nor the names of its contributors may be used to endorse or promote
-//       products derived from this software without specific prior written
-//       permission.
-// 
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
-// ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
-// WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-// DISCLAIMED. IN NO EVENT SHALL THE PARALLEL SYSTEMS ARCHITECTURE LABORATORY,
-// EPFL BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
-// GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
-// HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
-// LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
-// THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-//  DO-NOT-REMOVE end-copyright-block
 /*
  * USB xHCI controller emulation
  *
@@ -769,9 +725,9 @@ static TRBType xhci_ring_fetch(XHCIState *xhci, XHCIRing *ring, XHCITRB *trb,
         pci_dma_read(pci_dev, ring->dequeue, trb, TRB_SIZE);
         trb->addr = ring->dequeue;
         trb->ccs = ring->ccs;
-        trb->parameter = le64_to_cpu(trb->parameter);
-        trb->status = le32_to_cpu(trb->status);
-        trb->control = le32_to_cpu(trb->control);
+        le64_to_cpus(&trb->parameter);
+        le32_to_cpus(&trb->status);
+        le32_to_cpus(&trb->control);
 
         trace_usb_xhci_fetch_trb(ring->dequeue, trb_name(trb),
                                  trb->parameter, trb->status, trb->control);
@@ -815,9 +771,9 @@ static int xhci_ring_chain_length(XHCIState *xhci, const XHCIRing *ring)
     while (1) {
         TRBType type;
         pci_dma_read(pci_dev, dequeue, &trb, TRB_SIZE);
-        trb.parameter = le64_to_cpu(trb.parameter);
-        trb.status = le32_to_cpu(trb.status);
-        trb.control = le32_to_cpu(trb.control);
+        le64_to_cpus(&trb.parameter);
+        le32_to_cpus(&trb.status);
+        le32_to_cpus(&trb.control);
 
         if ((trb.control & TRB_C) != ccs) {
             return -length;
@@ -870,9 +826,9 @@ static void xhci_er_reset(XHCIState *xhci, int v)
         return;
     }
     pci_dma_read(PCI_DEVICE(xhci), erstba, &seg, sizeof(seg));
-    seg.addr_low = le32_to_cpu(seg.addr_low);
-    seg.addr_high = le32_to_cpu(seg.addr_high);
-    seg.size = le32_to_cpu(seg.size);
+    le32_to_cpus(&seg.addr_low);
+    le32_to_cpus(&seg.addr_high);
+    le32_to_cpus(&seg.size);
     if (seg.size < 16 || seg.size > 4096) {
         DPRINTF("xhci: invalid value for segment size: %d\n", seg.size);
         xhci_die(xhci);
@@ -3325,7 +3281,7 @@ static void usb_xhci_init(XHCIState *xhci)
 {
     DeviceState *dev = DEVICE(xhci);
     XHCIPort *port;
-    unsigned int i, usbports, speedmask;
+    int i, usbports, speedmask;
 
     xhci->usbsts = USBSTS_HCH;
 

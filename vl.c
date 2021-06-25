@@ -1,47 +1,3 @@
-//  DO-NOT-REMOVE begin-copyright-block
-// QFlex consists of several software components that are governed by various
-// licensing terms, in addition to software that was developed internally.
-// Anyone interested in using QFlex needs to fully understand and abide by the
-// licenses governing all the software components.
-// 
-// ### Software developed externally (not by the QFlex group)
-// 
-//     * [NS-3] (https://www.gnu.org/copyleft/gpl.html)
-//     * [QEMU] (http://wiki.qemu.org/License)
-//     * [SimFlex] (http://parsa.epfl.ch/simflex/)
-//     * [GNU PTH] (https://www.gnu.org/software/pth/)
-// 
-// ### Software developed internally (by the QFlex group)
-// **QFlex License**
-// 
-// QFlex
-// Copyright (c) 2020, Parallel Systems Architecture Lab, EPFL
-// All rights reserved.
-// 
-// Redistribution and use in source and binary forms, with or without modification,
-// are permitted provided that the following conditions are met:
-// 
-//     * Redistributions of source code must retain the above copyright notice,
-//       this list of conditions and the following disclaimer.
-//     * Redistributions in binary form must reproduce the above copyright notice,
-//       this list of conditions and the following disclaimer in the documentation
-//       and/or other materials provided with the distribution.
-//     * Neither the name of the Parallel Systems Architecture Laboratory, EPFL,
-//       nor the names of its contributors may be used to endorse or promote
-//       products derived from this software without specific prior written
-//       permission.
-// 
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
-// ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
-// WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-// DISCLAIMED. IN NO EVENT SHALL THE PARALLEL SYSTEMS ARCHITECTURE LABORATORY,
-// EPFL BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
-// GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
-// HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
-// LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
-// THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-//  DO-NOT-REMOVE end-copyright-block
 /*
  * QEMU System Emulator
  *
@@ -71,15 +27,9 @@
 #include "qemu/help_option.h"
 #include "qemu/uuid.h"
 
-
-
 #ifdef CONFIG_SECCOMP
 #include "sysemu/seccomp.h"
 #include "sys/prctl.h"
-#endif
-
-#ifdef CONFIG_EXTSNAP
-    bool exton = false;
 #endif
 
 #ifdef CONFIG_SDL
@@ -179,10 +129,6 @@ int main(int argc, char **argv)
 #include "qapi/qmp/qerror.h"
 #include "sysemu/iothread.h"
 
-#if defined(CONFIG_FLEXUS)
-#include "qflex/qflex-log.h"
-#endif /* CONFIG_FLEXUS */
-
 #define MAX_VIRTIO_CONSOLES 1
 #define MAX_SCLP_CONSOLES 1
 
@@ -214,9 +160,6 @@ Chardev *virtcon_hds[MAX_VIRTIO_CONSOLES];
 Chardev *sclp_hds[MAX_SCLP_CONSOLES];
 int win2k_install_hack = 0;
 int singlestep = 0;
-#ifdef CONFIG_FLEXUS
-int smp_sockets = 1;
-#endif
 int smp_cpus = 1;
 int max_cpus = 1;
 int smp_cores = 1;
@@ -569,97 +512,6 @@ static QemuOptsList qemu_icount_opts = {
         { /* end of list */ }
     },
 };
-
-#ifdef CONFIG_QUANTUM
-static QemuOptsList qemu_quantum_opts = {
-    .name = "quantum",
-    .implied_opt_name = "core",
-    .merge_lists = true,
-    .head = QTAILQ_HEAD_INITIALIZER(qemu_quantum_opts.head),
-    .desc = {
-        {
-            .name = "core",
-            .type = QEMU_OPT_STRING,
-        }, {
-            .name = "record",
-            .type = QEMU_OPT_STRING,
-        },{
-            .name = "step",
-            .type = QEMU_OPT_STRING,
-        },{
-            .name = "file",
-            .type = QEMU_OPT_STRING,
-        },{
-            .name = "node",
-            .type = QEMU_OPT_STRING,
-        },
-        { /* end of list */ }
-    },
-};
-#endif
-
-#ifdef CONFIG_FLEXUS
-static QemuOptsList qemu_flexus_opts = {
-    .name = "flexus",
-    .implied_opt_name = "mode",
-    .merge_lists = true,
-    .head = QTAILQ_HEAD_INITIALIZER(qemu_flexus_opts.head),
-    .desc = {
-        {
-            .name = "mode",
-            .type = QEMU_OPT_STRING,
-        }, {
-            .name = "length",
-            .type = QEMU_OPT_STRING,
-        }, {
-            .name = "simulator",
-            .type = QEMU_OPT_STRING,
-        }, {
-            .name = "config",
-            .type = QEMU_OPT_STRING,
-        }, {
-            .name = "debug",
-            .type = QEMU_OPT_STRING,
-        },
-        { /* end of list */ }
-    },
-};
-#ifdef CONFIG_EXTSNAP
-static QemuOptsList qemu_phases_opts = {
-    .name = "phases",
-    .implied_opt_name = "steps",
-    .merge_lists = true,
-    .head = QTAILQ_HEAD_INITIALIZER(qemu_phases_opts.head),
-    .desc = {
-        {
-            .name = "steps",
-            .type = QEMU_OPT_STRING,
-        }, {
-            .name = "name",
-            .type = QEMU_OPT_STRING,
-        },
-        { /* end of list */ }
-    },
-};
-
-static QemuOptsList qemu_ckpt_opts = {
-    .name = "ckpt",
-    .implied_opt_name = "every",
-    .merge_lists = true,
-    .head = QTAILQ_HEAD_INITIALIZER(qemu_ckpt_opts.head),
-    .desc = {
-        {
-            .name = "every",
-            .type = QEMU_OPT_STRING,
-        }, {
-            .name = "end",
-            .type = QEMU_OPT_STRING,
-        },
-        { /* end of list */ }
-    },
-};
-#endif
-#endif
 
 static QemuOptsList qemu_semihosting_config_opts = {
     .name = "semihosting-config",
@@ -1487,9 +1339,6 @@ static void smp_parse(QemuOpts *opts)
         smp_cpus = cpus;
         smp_cores = cores;
         smp_threads = threads;
-#ifdef CONFIG_FLEXUS
-        smp_sockets = sockets;
-#endif
     }
 
     if (smp_cpus > 1) {
@@ -1951,9 +1800,8 @@ void qemu_system_guest_panicked(GuestPanicInformation *info)
 {
     qemu_log_mask(LOG_GUEST_ERROR, "Guest crashed\n");
 
-    PTH_UPDATE_CONTEXT
-    if (PTH(current_cpu)) {
-        PTH(current_cpu)->crash_occurred = true;
+    if (current_cpu) {
+        current_cpu->crash_occurred = true;
     }
     qapi_event_send_guest_panicked(GUEST_PANIC_ACTION_PAUSE,
                                    !!info, info, &error_abort);
@@ -2137,10 +1985,6 @@ static bool main_loop_should_exit(void)
 
 static void main_loop(void)
 {
-#ifdef CONFIG_FLEXUS
-    prepareFlexus();
-#endif
-
 #ifdef CONFIG_PROFILER
     int64_t ti;
 #endif
@@ -2151,24 +1995,6 @@ static void main_loop(void)
         main_loop_wait(false);
 #ifdef CONFIG_PROFILER
         dev_time += profile_getclock() - ti;
-#endif
-
-#if defined(CONFIG_FLEXUS) && defined(CONFIG_EXTSNAP)
-    if (is_phases_enabled() || is_ckpt_enabled()){
-        if ( save_request_pending() && !cont_request_pending()) {
-            save_vmstate_ext(NULL, get_ckpt_name());
-            toggle_save_request();
-            toggle_cont_request();
-        } else {
-            if(cont_request_pending()) {
-                qmp_cont(NULL);
-                toggle_cont_request();
-            }
-        }
-    } else if (quit_request_pending()){
-        qmp_quit(NULL);
-    }
-
 #endif
     } while (!main_loop_should_exit());
 }
@@ -3264,17 +3090,6 @@ static void register_global_properties(MachineState *ms)
 
 int main(int argc, char **argv, char **envp)
 {
-#ifdef CONFIG_PTH
-    initMainThread();
-#endif
-
-#ifdef CONFIG_FLEXUS
-     QemuOpts *flexus_opts = NULL;
-#ifdef CONFIG_EXTSNAP
-     QemuOpts *phases_opts = NULL;
-     QemuOpts *ckpt_opts = NULL;
-#endif
-#endif
     int i;
     int snapshot, linux_boot;
     const char *initrd_filename;
@@ -3285,9 +3100,6 @@ int main(int argc, char **argv, char **envp)
     int cyls, heads, secs, translation;
     QemuOpts *opts, *machine_opts;
     QemuOpts *hda_opts = NULL, *icount_opts = NULL, *accel_opts = NULL;
-#ifdef CONFIG_QUANTUM
-    QemuOpts *quantum_opts = NULL;
-#endif
     QemuOptsList *olist;
     int optind;
     const char *optarg;
@@ -3313,14 +3125,7 @@ int main(int argc, char **argv, char **envp)
     Error *main_loop_err = NULL;
     Error *err = NULL;
     bool list_data_dirs = false;
-#ifdef CONFIG_EXTSNAP
-    const char* loadext = NULL;
-#endif
-#if defined(CONFIG_FLEXUS)
-    const char *qflex_log_opts = NULL;
-#endif /* CONFIG_FLEXUS */
-
-   char **dirs;
+    char **dirs;
     typedef struct BlockdevOptions_queue {
         BlockdevOptions *bdo;
         Location loc;
@@ -3370,16 +3175,6 @@ int main(int argc, char **argv, char **envp)
     qemu_add_opts(&qemu_name_opts);
     qemu_add_opts(&qemu_numa_opts);
     qemu_add_opts(&qemu_icount_opts);
-#ifdef CONFIG_QUANTUM
-    qemu_add_opts(&qemu_quantum_opts);
-#endif
-#ifdef CONFIG_FLEXUS
-    qemu_add_opts(&qemu_flexus_opts);
-#ifdef CONFIG_EXTSNAP
-    qemu_add_opts(&qemu_ckpt_opts);
-    qemu_add_opts(&qemu_phases_opts);
-#endif
-#endif
     qemu_add_opts(&qemu_semihosting_config_opts);
     qemu_add_opts(&qemu_fw_cfg_opts);
     module_call_init(MODULE_INIT_OPTS);
@@ -3612,15 +3407,6 @@ int main(int argc, char **argv, char **envp)
                 exit(1);
 #endif
                 break;
-#ifdef CONFIG_EXTSNAP
-            case QEMU_OPTION_exton:
-                exton = true;
-                break;
-            case QEMU_OPTION_loadext:
-                exton = true;
-                loadext = optarg;
-                break;
-#endif
             case QEMU_OPTION_portrait:
                 graphic_rotate = 90;
                 break;
@@ -3964,38 +3750,6 @@ int main(int argc, char **argv, char **envp)
                     default_monitor = 0;
                 }
                 break;
-#ifdef CONFIG_FLEXUS
-        case QEMU_OPTION_flexus:
-             flexus_opts = qemu_opts_parse_noisily(qemu_find_opts("flexus"),
-                                                      optarg, true);
-             if (!flexus_opts) {
-                 exit(1);
-             }
-             break;
-#ifdef CONFIG_EXTSNAP
-        case QEMU_OPTION_phases:
-                if (is_ckpt_enabled())
-                    fprintf(stderr, "cant use phases and ckpt together");
-            phases_opts = qemu_opts_parse_noisily(qemu_find_opts("phases"),
-                                                  optarg, true);
-            if (!phases_opts) {
-                exit(1);
-            }
-            toggle_phases_creation();
-            break;
-
-        case QEMU_OPTION_ckpt:
-                if (is_phases_enabled())
-                    fprintf(stderr, "cant use phase and ckpt together");
-                ckpt_opts = qemu_opts_parse_noisily(qemu_find_opts("ckpt"),
-                                                      optarg, true);
-            if (!ckpt_opts) {
-                exit(1);
-            }
-            toggle_ckpt_creation();
-            break;
-#endif
-#endif // CONFIG_FLEXUS
             case QEMU_OPTION_watchdog:
                 if (watchdog) {
                     error_report("only one watchdog option may be given");
@@ -4023,15 +3777,6 @@ int main(int argc, char **argv, char **envp)
                     default_monitor = 0;
                 }
                 break;
-#ifdef CONFIG_QUANTUM
-            case QEMU_OPTION_quantum:
-                quantum_opts = qemu_opts_parse_noisily(qemu_find_opts("quantum"),
-                                                      optarg, true);
-                if (!quantum_opts) {
-                    exit(1);
-                }
-                break;
-#endif
             case QEMU_OPTION_debugcon:
                 add_device_config(DEV_DEBUGCON, optarg);
                 break;
@@ -4462,11 +4207,6 @@ int main(int argc, char **argv, char **envp)
                     exit(1);
                 }
                 break;
-#if defined(CONFIG_FLEXUS) ||defined(CONFIG_FA_QFLEX)
-            case QEMU_OPTION_qflex_d:
-                    qflex_log_opts = optarg;
-                    break;
-#endif /* CONFIG_FLEXUS */ /* CONFIG_FA_QFLEX */
             default:
                 os_parse_cmd_args(popt->index, optarg);
             }
@@ -5136,66 +4876,8 @@ int main(int argc, char **argv, char **envp)
         if (load_snapshot(loadvm, &local_err) < 0) {
             error_report_err(local_err);
             autostart = 0;
-#ifdef CONFIG_QUANTUM
-            if(query_quantum_record_value() > 0)
-                raise(SIGSTOP);
-#endif
         }
     }
-#ifdef CONFIG_QUANTUM
-    if (quantum_opts)
-        configure_quantum(quantum_opts, &error_abort);
-#endif
-
-#ifdef CONFIG_FLEXUS
-    if (flexus_opts) {
-        configure_flexus(flexus_opts, &error_abort);
-    }
-#endif
-#ifdef CONFIG_EXTSNAP
-#ifdef CONFIG_FLEXUS
-    if (phases_opts)
-        configure_phases(phases_opts, &error_abort);
-
-    if (ckpt_opts)
-        configure_ckpt(ckpt_opts, &error_abort);
-#endif
-    if (exton) {
-        if(create_tmp_overlay() < 0){
-            fprintf(stdout, "External snapshots subsystem can not be loaded\n");
-            exit(1);
-	}
-    }
-    if (loadext) {
-#if defined (CONFIG_EXTSNAP) && defined (CONFIG_FLEXUS)
-        set_base_ckpt_name(loadext);
-#endif
-        if(incremental_load_vmstate_ext(loadext, NULL) < 0){
-            fprintf(stdout, "External snapshot with args: %s, can not be loaded\n", loadext);
-            exit(1);
-	}
-    }
-    else
-    {
-#if defined (CONFIG_EXTSNAP) && defined (CONFIG_FLEXUS)
-        set_base_ckpt_name("");
-#endif
-    }
-#endif
-
-#if defined(CONFIG_FLEXUS) || defined(CONFIG_FA_QFLEX)
-    if (qflex_log_opts) {
-        int mask;
-        mask = qflex_str_to_log_mask(qflex_log_opts);
-        if (!mask) {
-            qflex_print_log_usage(qflex_log_opts, stdout);
-            exit(1);
-        }
-        qflex_set_log(mask);
-    } else {
-        qflex_set_log(0);
-    }
-#endif /* CONFIG_FLEXUS */ /* CONFIG_FA_QLEX */
 
     qdev_prop_check_globals();
     if (vmstate_dump_file) {
@@ -5220,18 +4902,8 @@ int main(int argc, char **argv, char **envp)
     main_loop();
     replay_disable_events();
     iothread_stop_all();
-#ifdef CONFIG_EXTSNAP
-    if (exton == true) {
-       delete_tmp_overlay();
-    }
-#endif
-#ifdef CONFIG_FLEXUS
-    if (!flexus_in_timing() ) {
-        pause_all_vcpus();
-    }
-#else
+
     pause_all_vcpus();
-#endif
     bdrv_close_all();
     res_free();
 

@@ -1,47 +1,3 @@
-//  DO-NOT-REMOVE begin-copyright-block
-// QFlex consists of several software components that are governed by various
-// licensing terms, in addition to software that was developed internally.
-// Anyone interested in using QFlex needs to fully understand and abide by the
-// licenses governing all the software components.
-// 
-// ### Software developed externally (not by the QFlex group)
-// 
-//     * [NS-3] (https://www.gnu.org/copyleft/gpl.html)
-//     * [QEMU] (http://wiki.qemu.org/License)
-//     * [SimFlex] (http://parsa.epfl.ch/simflex/)
-//     * [GNU PTH] (https://www.gnu.org/software/pth/)
-// 
-// ### Software developed internally (by the QFlex group)
-// **QFlex License**
-// 
-// QFlex
-// Copyright (c) 2020, Parallel Systems Architecture Lab, EPFL
-// All rights reserved.
-// 
-// Redistribution and use in source and binary forms, with or without modification,
-// are permitted provided that the following conditions are met:
-// 
-//     * Redistributions of source code must retain the above copyright notice,
-//       this list of conditions and the following disclaimer.
-//     * Redistributions in binary form must reproduce the above copyright notice,
-//       this list of conditions and the following disclaimer in the documentation
-//       and/or other materials provided with the distribution.
-//     * Neither the name of the Parallel Systems Architecture Laboratory, EPFL,
-//       nor the names of its contributors may be used to endorse or promote
-//       products derived from this software without specific prior written
-//       permission.
-// 
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
-// ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
-// WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-// DISCLAIMED. IN NO EVENT SHALL THE PARALLEL SYSTEMS ARCHITECTURE LABORATORY,
-// EPFL BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
-// GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
-// HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
-// LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
-// THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-//  DO-NOT-REMOVE end-copyright-block
 /*
  * sigaltstack coroutine initialization code
  *
@@ -97,26 +53,16 @@ typedef struct {
     void *tr_handler;
 } CoroutineThreadState;
 
-#ifndef CONFIG_PTH
 static pthread_key_t thread_state_key;
-#else
-static pthpthread_key_t thread_state_key;
-#endif
+
 static CoroutineThreadState *coroutine_get_thread_state(void)
 {
-#ifndef CONFIG_PTH
     CoroutineThreadState *s = pthread_getspecific(thread_state_key);
-#else
-    CoroutineThreadState *s = pthpthread_getspecific(thread_state_key);
-#endif
+
     if (!s) {
         s = g_malloc0(sizeof(*s));
         s->current = &s->leader.base;
-#ifndef CONFIG_PTH
         pthread_setspecific(thread_state_key, s);
-#else
-        pthpthread_setspecific(thread_state_key, s);
-#endif
     }
     return s;
 }
@@ -131,11 +77,8 @@ static void qemu_coroutine_thread_cleanup(void *opaque)
 static void __attribute__((constructor)) coroutine_init(void)
 {
     int ret;
-#ifndef CONFIG_PTH
+
     ret = pthread_key_create(&thread_state_key, qemu_coroutine_thread_cleanup);
-#else
-    ret = pthpthread_key_create(&thread_state_key, qemu_coroutine_thread_cleanup);
-#endif
     if (ret != 0) {
         fprintf(stderr, "unable to create leader key: %s\n", strerror(errno));
         abort();
@@ -235,11 +178,7 @@ Coroutine *qemu_coroutine_new(void)
      */
     sigemptyset(&sigs);
     sigaddset(&sigs, SIGUSR2);
-#ifndef CONFIG_PTH
     pthread_sigmask(SIG_BLOCK, &sigs, &osigs);
-#else
-    pthpthread_sigmask(SIG_BLOCK, &sigs, &osigs);
-#endif
     sa.sa_handler = coroutine_trampoline;
     sigfillset(&sa.sa_mask);
     sa.sa_flags = SA_ONSTACK;
@@ -265,11 +204,7 @@ Coroutine *qemu_coroutine_new(void)
      * called.
      */
     coTS->tr_called = 0;
-#ifndef CONFIG_PTH
     pthread_kill(pthread_self(), SIGUSR2);
-#else
-    pthpthread_kill(pthpthread_self(), SIGUSR2);
-#endif
     sigfillset(&sigs);
     sigdelset(&sigs, SIGUSR2);
     while (!coTS->tr_called) {
@@ -295,11 +230,8 @@ Coroutine *qemu_coroutine_new(void)
      * Restore the old SIGUSR2 signal handler and mask
      */
     sigaction(SIGUSR2, &osa, NULL);
-#ifndef CONFIG_PTH
     pthread_sigmask(SIG_SETMASK, &osigs, NULL);
-#else
-    pthpthread_sigmask(SIG_SETMASK, &osigs, NULL);
-#endif
+
     /*
      * Now enter the trampoline again, but this time not as a signal
      * handler. Instead we jump into it directly. The functionally
@@ -352,11 +284,8 @@ Coroutine *qemu_coroutine_self(void)
 
 bool qemu_in_coroutine(void)
 {
-#ifndef CONFIG_PTH
     CoroutineThreadState *s = pthread_getspecific(thread_state_key);
-#else
-    CoroutineThreadState *s = pthpthread_getspecific(thread_state_key);
-#endif
+
     return s && s->current->caller;
 }
 

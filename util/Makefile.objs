@@ -1,9 +1,4 @@
-#######################################################################
-# Common libraries for QFLEX
-util-obj-y = qflex/
-#######################################################################
-
-util-obj-y += osdep.o cutils.o unicode.o qemu-timer-common.o
+util-obj-y = osdep.o cutils.o unicode.o qemu-timer-common.o
 util-obj-y += bufferiszero.o
 util-obj-y += lockcnt.o
 util-obj-y += aiocb.o async.o thread-pool.o qemu-timer.o
@@ -15,8 +10,6 @@ util-obj-$(CONFIG_POSIX) += mmap-alloc.o
 util-obj-$(CONFIG_POSIX) += oslib-posix.o
 util-obj-$(CONFIG_POSIX) += qemu-openpty.o
 util-obj-$(CONFIG_POSIX) += qemu-thread-posix.o
-util-obj-$(CONFIG_PTH) += qemu-thread-pth.o
-util-obj-$(CONFIG_PTH) += qemu-thread-pth-internal.o
 util-obj-$(CONFIG_POSIX) += memfd.o
 util-obj-$(CONFIG_WIN32) += aio-win32.o
 util-obj-$(CONFIG_WIN32) += event_notifier-win32.o

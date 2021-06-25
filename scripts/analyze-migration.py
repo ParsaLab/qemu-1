@@ -17,8 +17,6 @@
 # You should have received a copy of the GNU Lesser General Public
 # License along with this library; if not, see <http://www.gnu.org/licenses/>.
 
-from __future__ import print_function
-
 import numpy as np
 import json
 import os
@@ -164,7 +162,7 @@ class RamSection(object):
                     len = self.file.read64()
                     self.sizeinfo[self.name] = '0x%016x' % len
                     if self.write_memory:
-                        print(self.name)
+                        print self.name
                         mkdir_p('./' + os.path.dirname(self.name))
                         f = open('./' + self.name, "wb")
                         f.truncate(0)
@@ -361,7 +359,7 @@ class VMSDFieldStruct(VMSDFieldGeneric):
             array_len = field.pop('array_len')
             field['index'] = 0
             new_fields.append(field)
-            for i in range(1, array_len):
+            for i in xrange(1, array_len):
                 c = field.copy()
                 c['index'] = i
                 new_fields.append(c)
@@ -586,7 +584,7 @@ if args.extract:
     dump = MigrationDump(args.file)
 
     dump.read(desc_only = True)
-    print("desc.json")
+    print "desc.json"
     f = open("desc.json", "wb")
     f.truncate()
     f.write(jsonenc.encode(dump.vmsd_desc))
@@ -594,7 +592,7 @@ if args.extract:
 
     dump.read(write_memory = True)
     dict = dump.getDict()
-    print("state.json")
+    print "state.json"
     f = open("state.json", "wb")
     f.truncate()
     f.write(jsonenc.encode(dict))
@@ -603,10 +601,10 @@ elif args.dump == "state":
     dump = MigrationDump(args.file)
     dump.read(dump_memory = args.memory)
     dict = dump.getDict()
-    print(jsonenc.encode(dict))
+    print jsonenc.encode(dict)
 elif args.dump == "desc":
     dump = MigrationDump(args.file)
     dump.read(desc_only = True)
-    print(jsonenc.encode(dump.vmsd_desc))
+    print jsonenc.encode(dump.vmsd_desc)
 else:
     raise Exception("Please specify either -x, -d state or -d dump")

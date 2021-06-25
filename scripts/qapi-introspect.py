@@ -65,13 +65,13 @@ class QAPISchemaGenIntrospectVisitor(QAPISchemaVisitor):
         # TODO can generate awfully long lines
         jsons.extend(self._jsons)
         name = c_name(prefix, protect=False) + 'qmp_schema_json'
-        self.decl = mcgen(u'''
+        self.decl = mcgen('''
 extern const char %(c_name)s[];
 ''',
                           c_name=c_name(name))
         lines = to_json(jsons).split('\n')
         c_string = '\n    '.join([to_c_string(line) for line in lines])
-        self.defn = mcgen(u'''
+        self.defn = mcgen('''
 const char %(c_name)s[] = %(c_string)s;
 ''',
                           c_name=c_name(name),
@@ -203,7 +203,7 @@ h_comment = '''
                             'qmp-introspect.c', 'qmp-introspect.h',
                             c_comment, h_comment)
 
-fdef.write(mcgen(u'''
+fdef.write(mcgen('''
 #include "qemu/osdep.h"
 #include "%(prefix)sqmp-introspect.h"
 

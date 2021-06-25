@@ -1,47 +1,3 @@
-//  DO-NOT-REMOVE begin-copyright-block
-// QFlex consists of several software components that are governed by various
-// licensing terms, in addition to software that was developed internally.
-// Anyone interested in using QFlex needs to fully understand and abide by the
-// licenses governing all the software components.
-// 
-// ### Software developed externally (not by the QFlex group)
-// 
-//     * [NS-3] (https://www.gnu.org/copyleft/gpl.html)
-//     * [QEMU] (http://wiki.qemu.org/License)
-//     * [SimFlex] (http://parsa.epfl.ch/simflex/)
-//     * [GNU PTH] (https://www.gnu.org/software/pth/)
-// 
-// ### Software developed internally (by the QFlex group)
-// **QFlex License**
-// 
-// QFlex
-// Copyright (c) 2020, Parallel Systems Architecture Lab, EPFL
-// All rights reserved.
-// 
-// Redistribution and use in source and binary forms, with or without modification,
-// are permitted provided that the following conditions are met:
-// 
-//     * Redistributions of source code must retain the above copyright notice,
-//       this list of conditions and the following disclaimer.
-//     * Redistributions in binary form must reproduce the above copyright notice,
-//       this list of conditions and the following disclaimer in the documentation
-//       and/or other materials provided with the distribution.
-//     * Neither the name of the Parallel Systems Architecture Laboratory, EPFL,
-//       nor the names of its contributors may be used to endorse or promote
-//       products derived from this software without specific prior written
-//       permission.
-// 
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
-// ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
-// WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-// DISCLAIMED. IN NO EVENT SHALL THE PARALLEL SYSTEMS ARCHITECTURE LABORATORY,
-// EPFL BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
-// GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
-// HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
-// LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
-// THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-//  DO-NOT-REMOVE end-copyright-block
 /*
  * QEMU Crypto cipher nettle algorithms
  *
@@ -86,89 +42,29 @@ typedef void *       cipher_ctx_t;
 typedef unsigned     cipher_length_t;
 
 #define cast5_set_key cast128_set_key
-
-#define aes128_ctx aes_ctx
-#define aes192_ctx aes_ctx
-#define aes256_ctx aes_ctx
-#define aes128_set_encrypt_key(c, k) \
-    aes_set_encrypt_key(c, 16, k)
-#define aes192_set_encrypt_key(c, k) \
-    aes_set_encrypt_key(c, 24, k)
-#define aes256_set_encrypt_key(c, k) \
-    aes_set_encrypt_key(c, 32, k)
-#define aes128_set_decrypt_key(c, k) \
-    aes_set_decrypt_key(c, 16, k)
-#define aes192_set_decrypt_key(c, k) \
-    aes_set_decrypt_key(c, 24, k)
-#define aes256_set_decrypt_key(c, k) \
-    aes_set_decrypt_key(c, 32, k)
-#define aes128_encrypt aes_encrypt
-#define aes192_encrypt aes_encrypt
-#define aes256_encrypt aes_encrypt
-#define aes128_decrypt aes_decrypt
-#define aes192_decrypt aes_decrypt
-#define aes256_decrypt aes_decrypt
 #else
 typedef nettle_cipher_func * QCryptoCipherNettleFuncNative;
 typedef const void * cipher_ctx_t;
 typedef size_t       cipher_length_t;
 #endif
 
-typedef struct QCryptoNettleAES128 {
-    struct aes128_ctx enc;
-    struct aes128_ctx dec;
-} QCryptoNettleAES128;
+typedef struct QCryptoNettleAES {
+    struct aes_ctx enc;
+    struct aes_ctx dec;
+} QCryptoNettleAES;
 
-typedef struct QCryptoNettleAES192 {
-    struct aes192_ctx enc;
-    struct aes192_ctx dec;
-} QCryptoNettleAES192;
-
-typedef struct QCryptoNettleAES256 {
-    struct aes256_ctx enc;
-    struct aes256_ctx dec;
-} QCryptoNettleAES256;
-
-static void aes128_encrypt_native(cipher_ctx_t ctx, cipher_length_t length,
-                                  uint8_t *dst, const uint8_t *src)
-{
-    const QCryptoNettleAES128 *aesctx = ctx;
-    aes128_encrypt(&aesctx->enc, length, dst, src);
-}
-
-static void aes128_decrypt_native(cipher_ctx_t ctx, cipher_length_t length,
-                                  uint8_t *dst, const uint8_t *src)
-{
-    const QCryptoNettleAES128 *aesctx = ctx;
-    aes128_decrypt(&aesctx->dec, length, dst, src);
-}
-
-static void aes192_encrypt_native(cipher_ctx_t ctx, cipher_length_t length,
+static void aes_encrypt_native(cipher_ctx_t ctx, cipher_length_t length,
                                uint8_t *dst, const uint8_t *src)
 {
-    const QCryptoNettleAES192 *aesctx = ctx;
-    aes192_encrypt(&aesctx->enc, length, dst, src);
+    const QCryptoNettleAES *aesctx = ctx;
+    aes_encrypt(&aesctx->enc, length, dst, src);
 }
 
-static void aes192_decrypt_native(cipher_ctx_t ctx, cipher_length_t length,
+static void aes_decrypt_native(cipher_ctx_t ctx, cipher_length_t length,
                                uint8_t *dst, const uint8_t *src)
 {
-    const QCryptoNettleAES192 *aesctx = ctx;
-    aes192_decrypt(&aesctx->dec, length, dst, src);
-}
-
-static void aes256_encrypt_native(cipher_ctx_t ctx, cipher_length_t length,
-                               uint8_t *dst, const uint8_t *src)
-{
-    const QCryptoNettleAES256 *aesctx = ctx;
-    aes256_encrypt(&aesctx->enc, length, dst, src);
-}
-
-static void aes256_decrypt_native(cipher_ctx_t ctx, cipher_length_t length,
-                               uint8_t *dst, const uint8_t *src)
-{
-    const QCryptoNettleAES256 *aesctx = ctx;
-    aes256_decrypt(&aesctx->dec, length, dst, src);
+    const QCryptoNettleAES *aesctx = ctx;
+    aes_decrypt(&aesctx->dec, length, dst, src);
 }
 
 static void des_encrypt_native(cipher_ctx_t ctx, cipher_length_t length,
@@ -231,46 +127,18 @@ static void twofish_decrypt_native(cipher_ctx_t ctx, cipher_length_t length,
     twofish_decrypt(ctx, length, dst, src);
 }
 
-static void aes128_encrypt_wrapper(const void *ctx, size_t length,
+static void aes_encrypt_wrapper(const void *ctx, size_t length,
                                 uint8_t *dst, const uint8_t *src)
 {
-    const QCryptoNettleAES128 *aesctx = ctx;
-    aes128_encrypt(&aesctx->enc, length, dst, src);
+    const QCryptoNettleAES *aesctx = ctx;
+    aes_encrypt(&aesctx->enc, length, dst, src);
 }
 
-static void aes128_decrypt_wrapper(const void *ctx, size_t length,
+static void aes_decrypt_wrapper(const void *ctx, size_t length,
                                 uint8_t *dst, const uint8_t *src)
 {
-    const QCryptoNettleAES128 *aesctx = ctx;
-    aes128_decrypt(&aesctx->dec, length, dst, src);
-}
-
-static void aes192_encrypt_wrapper(const void *ctx, size_t length,
-                                uint8_t *dst, const uint8_t *src)
-{
-    const QCryptoNettleAES192 *aesctx = ctx;
-    aes192_encrypt(&aesctx->enc, length, dst, src);
-}
-
-static void aes192_decrypt_wrapper(const void *ctx, size_t length,
-                                uint8_t *dst, const uint8_t *src)
-{
-    const QCryptoNettleAES192 *aesctx = ctx;
-    aes192_decrypt(&aesctx->dec, length, dst, src);
-}
-
-static void aes256_encrypt_wrapper(const void *ctx, size_t length,
-                                uint8_t *dst, const uint8_t *src)
-{
-    const QCryptoNettleAES256 *aesctx = ctx;
-    aes256_encrypt(&aesctx->enc, length, dst, src);
-}
-
-static void aes256_decrypt_wrapper(const void *ctx, size_t length,
-                                uint8_t *dst, const uint8_t *src)
-{
-    const QCryptoNettleAES256 *aesctx = ctx;
-    aes256_decrypt(&aesctx->dec, length, dst, src);
+    const QCryptoNettleAES *aesctx = ctx;
+    aes_decrypt(&aesctx->dec, length, dst, src);
 }
 
 static void des_encrypt_wrapper(const void *ctx, size_t length,
@@ -451,94 +319,34 @@ static QCryptoCipherNettle *qcrypto_cipher_ctx_new(QCryptoCipherAlgorithm alg,
         break;
 
     case QCRYPTO_CIPHER_ALG_AES_128:
-        ctx->ctx = g_new0(QCryptoNettleAES128, 1);
-
-        if (mode == QCRYPTO_CIPHER_MODE_XTS) {
-            ctx->ctx_tweak = g_new0(QCryptoNettleAES128, 1);
-
-            nkey /= 2;
-            aes128_set_encrypt_key(&((QCryptoNettleAES128 *)ctx->ctx)->enc,
-                                   key);
-            aes128_set_decrypt_key(&((QCryptoNettleAES128 *)ctx->ctx)->dec,
-                                   key);
-
-            aes128_set_encrypt_key(&((QCryptoNettleAES128 *)ctx->ctx_tweak)->
-                                   enc, key + nkey);
-            aes128_set_decrypt_key(&((QCryptoNettleAES128 *)ctx->ctx_tweak)->
-                                   dec, key + nkey);
-        } else {
-            aes128_set_encrypt_key(&((QCryptoNettleAES128 *)ctx->ctx)->enc,
-                                   key);
-            aes128_set_decrypt_key(&((QCryptoNettleAES128 *)ctx->ctx)->dec,
-                                   key);
-        }
-
-        ctx->alg_encrypt_native = aes128_encrypt_native;
-        ctx->alg_decrypt_native = aes128_decrypt_native;
-        ctx->alg_encrypt_wrapper = aes128_encrypt_wrapper;
-        ctx->alg_decrypt_wrapper = aes128_decrypt_wrapper;
-
-        ctx->blocksize = AES_BLOCK_SIZE;
-        break;
-
     case QCRYPTO_CIPHER_ALG_AES_192:
-        ctx->ctx = g_new0(QCryptoNettleAES192, 1);
-
-        if (mode == QCRYPTO_CIPHER_MODE_XTS) {
-            ctx->ctx_tweak = g_new0(QCryptoNettleAES192, 1);
-
-            nkey /= 2;
-            aes192_set_encrypt_key(&((QCryptoNettleAES192 *)ctx->ctx)->enc,
-                                   key);
-            aes192_set_decrypt_key(&((QCryptoNettleAES192 *)ctx->ctx)->dec,
-                                   key);
-
-            aes192_set_encrypt_key(&((QCryptoNettleAES192 *)ctx->ctx_tweak)->
-                                   enc, key + nkey);
-            aes192_set_decrypt_key(&((QCryptoNettleAES192 *)ctx->ctx_tweak)->
-                                   dec, key + nkey);
-        } else {
-            aes192_set_encrypt_key(&((QCryptoNettleAES192 *)ctx->ctx)->enc,
-                                   key);
-            aes192_set_decrypt_key(&((QCryptoNettleAES192 *)ctx->ctx)->dec,
-                                   key);
-        }
-
-        ctx->alg_encrypt_native = aes192_encrypt_native;
-        ctx->alg_decrypt_native = aes192_decrypt_native;
-        ctx->alg_encrypt_wrapper = aes192_encrypt_wrapper;
-        ctx->alg_decrypt_wrapper = aes192_decrypt_wrapper;
-
-        ctx->blocksize = AES_BLOCK_SIZE;
-        break;
-
     case QCRYPTO_CIPHER_ALG_AES_256:
-        ctx->ctx = g_new0(QCryptoNettleAES256, 1);
+        ctx->ctx = g_new0(QCryptoNettleAES, 1);
 
         if (mode == QCRYPTO_CIPHER_MODE_XTS) {
-            ctx->ctx_tweak = g_new0(QCryptoNettleAES256, 1);
+            ctx->ctx_tweak = g_new0(QCryptoNettleAES, 1);
 
             nkey /= 2;
-            aes256_set_encrypt_key(&((QCryptoNettleAES256 *)ctx->ctx)->enc,
-                                   key);
-            aes256_set_decrypt_key(&((QCryptoNettleAES256 *)ctx->ctx)->dec,
-                                   key);
+            aes_set_encrypt_key(&((QCryptoNettleAES *)ctx->ctx)->enc,
+                                nkey, key);
+            aes_set_decrypt_key(&((QCryptoNettleAES *)ctx->ctx)->dec,
+                                nkey, key);
 
-            aes256_set_encrypt_key(&((QCryptoNettleAES256 *)ctx->ctx_tweak)->
-                                   enc, key + nkey);
-            aes256_set_decrypt_key(&((QCryptoNettleAES256 *)ctx->ctx_tweak)->
-                                   dec, key + nkey);
+            aes_set_encrypt_key(&((QCryptoNettleAES *)ctx->ctx_tweak)->enc,
+                                nkey, key + nkey);
+            aes_set_decrypt_key(&((QCryptoNettleAES *)ctx->ctx_tweak)->dec,
+                                nkey, key + nkey);
         } else {
-            aes256_set_encrypt_key(&((QCryptoNettleAES256 *)ctx->ctx)->enc,
-                                   key);
-            aes256_set_decrypt_key(&((QCryptoNettleAES256 *)ctx->ctx)->dec,
-                                   key);
+            aes_set_encrypt_key(&((QCryptoNettleAES *)ctx->ctx)->enc,
+                                nkey, key);
+            aes_set_decrypt_key(&((QCryptoNettleAES *)ctx->ctx)->dec,
+                                nkey, key);
         }
 
-        ctx->alg_encrypt_native = aes256_encrypt_native;
-        ctx->alg_decrypt_native = aes256_decrypt_native;
-        ctx->alg_encrypt_wrapper = aes256_encrypt_wrapper;
-        ctx->alg_decrypt_wrapper = aes256_decrypt_wrapper;
+        ctx->alg_encrypt_native = aes_encrypt_native;
+        ctx->alg_decrypt_native = aes_decrypt_native;
+        ctx->alg_encrypt_wrapper = aes_encrypt_wrapper;
+        ctx->alg_decrypt_wrapper = aes_decrypt_wrapper;
 
         ctx->blocksize = AES_BLOCK_SIZE;
         break;

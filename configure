@@ -325,9 +325,6 @@ bigendian="no"
 mingw32="no"
 gcov="no"
 gcov_tool="gcov"
-asan="no"
-have_asan_iface_h="no"
-have_asan_iface_fiber="no"
 EXESUF=""
 DSOSUF=".so"
 LDFLAGS_SHARED="-shared"
@@ -418,17 +415,6 @@ supported_cpu="no"
 supported_os="no"
 bogus_os="no"
 
-#**************************
-# QFLEX START
-#**************************
-extsnap="no"
-flexus="no"
-quantum="no"
-pth="no"
-pth_path=""
-#**************************
-# QFLEX END
-#**************************
 # parse CC options first
 for opt do
   optarg=$(expr "x$opt" : 'x[^=]*=\(.*\)')
@@ -802,7 +788,7 @@ fi
 
 : ${make=${MAKE-make}}
 : ${install=${INSTALL-install}}
-: ${python=${PYTHON}}
+: ${python=${PYTHON-python}}
 : ${smbd=${SMBD-/usr/sbin/smbd}}
 
 # Default objcc to clang if available, otherwise use CC
@@ -1300,32 +1286,6 @@ for opt do
           error_exit "vhost-user isn't available on win32"
       fi
   ;;
-  --enable-asan) asan="yes"
-  ;;
-  #**************************
-  # QFLEX START
-  #**************************
-  --disable-extsnap) extsnap="no"
-  ;;
-  --enable-extsnap) extsnap="yes"
-  ;;
-  --disable-flexus) flexus="no"
-  ;;
-  --enable-flexus) flexus="yes"
-  ;;
-  --disable-quantum) quantum="no"
-  ;;
-  --enable-quantum) quantum="yes"
-  ;;
-  --disable-pth) pth="no"
-  ;;
-  --enable-pth) pth="yes"
-  ;;
-  --pth-path=*) pth_path="$optarg"
-  ;;
-  #**************************
-  # QFLEX END
-  #**************************
   *)
       echo "ERROR: unknown option $opt"
       echo "Try '$0 --help' for more information"
@@ -1484,7 +1444,6 @@ Advanced options (experts only):
   --with-coroutine=BACKEND coroutine backend. Supported options:
                            ucontext, sigaltstack, windows
   --enable-gcov            enable test coverage analysis with gcov
-  --enable-asan            enable address sanitizer
   --gcov=GCOV              use specified gcov [$gcov_tool]
   --disable-blobs          disable installing provided firmware blobs
   --with-vss-sdk=SDK-path  enable Windows VSS support in QEMU Guest Agent
@@ -1575,45 +1534,20 @@ disabled with --disable-FEATURE, default is enabled if available:
   crypto-afalg    Linux AF_ALG crypto backend driver
   vhost-user      vhost-user support
 
-  #**************************
-  # QFLEX START
-  #**************************
-  extsnap         support for external snapshots
-  flexus          support for the Flexus simulator
-  quantum         support for quantum value - no MTTCG at the moment
-  pth             support for GNU Pth - The GNU Portable Threads
-  #**************************
-  # QFLEX END
-  #**************************
-
 NOTE: The object files are built at the place where configure is launched
 EOF
 exit 0
 fi
 
-# Python explicitly specified, go with that
-if [ -n "$python" ] && ! has "$python"; then
-  error_exit "Python $python not found."
-# No python explicitly specified. Guess the right executable
-elif [ -z "$python" ]; then
-    # Prefer python3, python may be either 2 or 3 fallback to python2.
-    for p in ${python:-python3} python python2; do
-        if has "$p" ; then
-            python=$p
-            break
-        fi
-    done
-fi
-
-if ! has "$python"; then
+if ! has $python; then
   error_exit "Python not found. Use --python=/path/to/python"
 fi
 
 # Note that if the Python conditional here evaluates True we will exit
 # with status 1 which is a shell 'false' value.
-if $python -c 'import sys; sys.exit((sys.version_info[0],
-               sys.version_info[1]) == (2,7) or sys.version_info >= (3,2))'; then
-  error_exit "Cannot use '$python', Python 2.7 or Python 3.2 or later is required." \
+if ! $python -c 'import sys; sys.exit(sys.version_info < (2,6) or sys.version_info >= (3,))'; then
+  error_exit "Cannot use '$python', Python 2.6 or later is required." \
+      "Note that Python 3 or later is not yet supported." \
       "Use --python=/path/to/python to specify a supported Python."
 fi
 
@@ -3913,7 +3847,7 @@ fi
 # check if memfd is supported
 memfd=no
 cat > $TMPC << EOF
-#include <sys/mman.h>
+#include <sys/memfd.h>
 
 int main(void)
 {
@@ -4499,7 +4433,7 @@ fi
 sem_timedwait=no
 cat > $TMPC << EOF
 #include <semaphore.h>
-int main(void) { sem_t s; struct timespec t = {0}; return sem_timedwait(&s, &t); }
+int main(void) { return sem_timedwait(0, 0); }
 EOF
 if compile_prog "" "" ; then
     sem_timedwait=yes
@@ -5059,26 +4993,8 @@ if compile_prog "" "" ; then
 fi
 
 ##########################################
-# check for ASAN interface files (clang)
-if check_include "sanitizer/asan_interface.h" ; then
-    have_asan_iface_h=yes
-fi
-
-cat > $TMPC << EOF
-#include <sanitizer/asan_interface.h>
-int main(void) {
-__sanitizer_start_switch_fiber(0, 0, 0);
-return 0;
-}
-EOF
-if compile_prog "$CPU_CFLAGS -Werror -Wno-strict-prototypes -fsanitize=address" "" ; then
-    have_asan_iface_fiber=yes
-fi
-
-##########################################
 # End of CC checks
 # After here, no more $cc or $ld runs
-write_c_skeleton
 
 if test "$gcov" = "yes" ; then
   CFLAGS="-fprofile-arcs -ftest-coverage -g $CFLAGS"
@@ -5087,20 +5003,6 @@ elif test "$fortify_source" = "yes" ; then
   CFLAGS="-O2 -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=2 $CFLAGS"
 elif test "$debug" = "no"; then
   CFLAGS="-O2 $CFLAGS"
-fi
-
-#########################################
-# Add check for asan
-if test "$asan" = "yes"; then
-    if test "$have_asan_iface_h" = "no" ; then
-        echo "ASAN build enabled, but ASAN header missing." \
-            "Without code annotation, the report may be inferior."
-    elif test "$have_asan_iface_fiber" = "no" ; then
-        echo "ASAN build enabled, but ASAN header is too old." \
-            "Without code annotation, the report may be inferior."
-    fi
-    QEMU_CFLAGS="$QEMU_CFLAGS -fsanitize=address"
-    LDFLAGS="$LDFLAGS -fsanitize=address"
 fi
 
 ##########################################
@@ -5332,28 +5234,6 @@ EOF
     fi
   fi
 fi
-#**************************
-# QFLEX START
-#**************************
-if test "$extsnap" = "yes" ; then
-  QEMU_CFLAGS="-DCONFIG_EXTSNAP $QEMU_CFLAGS"
-fi
-if test "$flexus" = "yes" ; then
-  QEMU_CFLAGS="-DCONFIG_FLEXUS $QEMU_CFLAGS"
-  LIBS="-ldl $LIBS" 
-fi
-if test "$quantum" = "yes" ; then
-  QEMU_CFLAGS="-DCONFIG_QUANTUM $QEMU_CFLAGS"
-fi
-if test "$pth" = "yes" ; then
-  QEMU_CFLAGS="-I${pth_path}/include -fPIC -DCONFIG_PTH $QEMU_CFLAGS"
-  LIBS="-L${pth_path}/lib -lpth $LIBS"
-  LDFLAGS="-Wl,-rpath,${pth_path}/lib $LDFLAGS"
-  libs_qga="$libs_qga -L${pth_path}/lib -lpth"
-fi
-#**************************
-# QFLEX END
-#**************************
 
 # Check that the C++ compiler exists and works with the C compiler.
 # All the QEMU_CXXFLAGS are based on QEMU_CFLAGS. Keep this at the end to don't miss any other that could be added.
@@ -5529,7 +5409,6 @@ echo "crypto afalg      $crypto_afalg"
 echo "GlusterFS support $glusterfs"
 echo "gcov              $gcov_tool"
 echo "gcov enabled      $gcov"
-echo "ASan enabled      $asan"
 echo "TPM support       $tpm"
 echo "libssh2 support   $libssh2"
 echo "TPM passthrough   $tpm_passthrough"
@@ -5544,17 +5423,7 @@ echo "jemalloc support  $jemalloc"
 echo "avx2 optimization $avx2_opt"
 echo "replication support $replication"
 echo "VxHS block device $vxhs"
-echo "#**************************"
-echo "# QFLEX START"
-echo "#**************************"
-echo "external snapshots $extsnap"
-echo "Flexus support     $flexus"
-echo "Quantum support    $quantum"
-echo "GNU Pth            $pth"
-echo "GNU Pth lib path   $pth_path"
-echo "#**************************"
-echo "# QFLEX END"
-echo "#**************************"
+
 if test "$sdl_too_old" = "yes"; then
 echo "-> Your SDL version is too old - please upgrade to have SDL support"
 fi
@@ -6086,10 +5955,6 @@ if test "$valgrind_h" = "yes" ; then
   echo "CONFIG_VALGRIND_H=y" >> $config_host_mak
 fi
 
-if test "$have_asan_iface_fiber" = "yes" ; then
-    echo "HAVE_ASAN_IFACE_FIBER=y" >> $config_host_mak
-fi
-
 if test "$has_environ" = "yes" ; then
   echo "CONFIG_HAS_ENVIRON=y" >> $config_host_mak
 fi
@@ -6561,25 +6426,6 @@ if test "$target_softmmu" = "yes" ; then
     echo "TARGET_SUPPORTS_MTTCG=y" >> $config_target_mak
   fi
 fi
-#**************************
-# QFLEX START
-#**************************
-if test "$extsnap" = "yes" ; then
-  echo "CONFIG_EXTSNAP=y" >> $config_host_mak
-fi
-if test "$flexus" = "yes" ; then
-  echo "CONFIG_FLEXUS=y" >> $config_host_mak
-fi
-if test "$quantum" = "yes" ; then
-  echo "CONFIG_QUANTUM=y" >> $config_host_mak
-fi
-if test "$pth" = "yes" ; then
-  echo "CONFIG_PTH=y" >> $config_host_mak
-fi
-#**************************
-# QFLEX END
-#**************************
-
 if test "$target_user_only" = "yes" ; then
   echo "CONFIG_USER_ONLY=y" >> $config_target_mak
   echo "CONFIG_QEMU_INTERP_PREFIX=\"$interp_prefix1\"" >> $config_target_mak

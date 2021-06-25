@@ -10,8 +10,3 @@ obj-y += gdbstub.o
 obj-$(TARGET_AARCH64) += cpu64.o translate-a64.o helper-a64.o gdbstub64.o
 obj-y += crypto_helper.o
 obj-$(CONFIG_SOFTMMU) += arm-powerctl.o
-
-#######################################################################
-# Helper functions for QFLEX
-obj-$(TARGET_AARCH64) += qflex-helper.o
-#######################################################################

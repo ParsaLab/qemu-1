@@ -1,47 +1,3 @@
-//  DO-NOT-REMOVE begin-copyright-block
-// QFlex consists of several software components that are governed by various
-// licensing terms, in addition to software that was developed internally.
-// Anyone interested in using QFlex needs to fully understand and abide by the
-// licenses governing all the software components.
-// 
-// ### Software developed externally (not by the QFlex group)
-// 
-//     * [NS-3] (https://www.gnu.org/copyleft/gpl.html)
-//     * [QEMU] (http://wiki.qemu.org/License)
-//     * [SimFlex] (http://parsa.epfl.ch/simflex/)
-//     * [GNU PTH] (https://www.gnu.org/software/pth/)
-// 
-// ### Software developed internally (by the QFlex group)
-// **QFlex License**
-// 
-// QFlex
-// Copyright (c) 2020, Parallel Systems Architecture Lab, EPFL
-// All rights reserved.
-// 
-// Redistribution and use in source and binary forms, with or without modification,
-// are permitted provided that the following conditions are met:
-// 
-//     * Redistributions of source code must retain the above copyright notice,
-//       this list of conditions and the following disclaimer.
-//     * Redistributions in binary form must reproduce the above copyright notice,
-//       this list of conditions and the following disclaimer in the documentation
-//       and/or other materials provided with the distribution.
-//     * Neither the name of the Parallel Systems Architecture Laboratory, EPFL,
-//       nor the names of its contributors may be used to endorse or promote
-//       products derived from this software without specific prior written
-//       permission.
-// 
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
-// ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
-// WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-// DISCLAIMED. IN NO EVENT SHALL THE PARALLEL SYSTEMS ARCHITECTURE LABORATORY,
-// EPFL BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
-// GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
-// HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
-// LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
-// THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-//  DO-NOT-REMOVE end-copyright-block
 /*
  * os-posix-lib.c
  *
@@ -354,11 +310,7 @@ static void *do_touch_pages(void *arg)
     /* unblock SIGBUS */
     sigemptyset(&set);
     sigaddset(&set, SIGBUS);
-#ifndef CONFIG_PTH
     pthread_sigmask(SIG_UNBLOCK, &set, &oldset);
-#else
-    pthpthread_sigmask(SIG_UNBLOCK, &set, &oldset);
-#endif
 
     if (sigsetjmp(memset_args->env, 1)) {
         memset_thread_failed = true;
@@ -380,11 +332,7 @@ static void *do_touch_pages(void *arg)
             addr += hpagesize;
         }
     }
-#ifndef CONFIG_PTH
     pthread_sigmask(SIG_SETMASK, &oldset, NULL);
-#else
-    pthpthread_sigmask(SIG_SETMASK, &oldset, NULL);
-#endif
     return NULL;
 }
 
@@ -504,11 +452,7 @@ pid_t qemu_fork(Error **errp)
      * kill off caller's signal handlers without a race.
      */
     sigfillset(&newmask);
-#ifndef CONFIG_PTH
     if (pthread_sigmask(SIG_SETMASK, &newmask, &oldmask) != 0) {
-#else
-    if (pthpthread_sigmask(SIG_SETMASK, &newmask, &oldmask) != 0) {
-#endif
         error_setg_errno(errp, errno,
                          "cannot block signals");
         return -1;
@@ -520,11 +464,7 @@ pid_t qemu_fork(Error **errp)
     if (pid < 0) {
         /* attempt to restore signal mask, but ignore failure, to
          * avoid obscuring the fork failure */
-#ifndef CONFIG_PTH
         (void)pthread_sigmask(SIG_SETMASK, &oldmask, NULL);
-#else
-        (void)pthpthread_sigmask(SIG_SETMASK, &oldmask, NULL);
-#endif
         error_setg_errno(errp, saved_errno,
                          "cannot fork child process");
         errno = saved_errno;
@@ -536,11 +476,7 @@ pid_t qemu_fork(Error **errp)
          * safely running. Only documented failures are EFAULT (not
          * possible, since we are using just-grabbed mask) or EINVAL
          * (not possible, since we are using correct arguments).  */
-#ifndef CONFIG_PTH
         (void)pthread_sigmask(SIG_SETMASK, &oldmask, NULL);
-#else
-        (void)pthpthread_sigmask(SIG_SETMASK, &oldmask, NULL);
-#endif
     } else {
         /* child process */
         size_t i;
@@ -563,11 +499,7 @@ pid_t qemu_fork(Error **errp)
          * caller's done with their signal mask and don't want to
          * propagate that to children */
         sigemptyset(&newmask);
-#ifndef CONFIG_PTH
         if (pthread_sigmask(SIG_SETMASK, &newmask, NULL) != 0) {
-#else
-        if (pthpthread_sigmask(SIG_SETMASK, &newmask, NULL) != 0) {
-#endif
             Error *local_err = NULL;
             error_setg_errno(&local_err, errno,
                              "cannot unblock signals");
@@ -625,11 +557,11 @@ void *qemu_alloc_stack(size_t *sz)
 
     return ptr;
 }
-#ifndef CONFIG_PTH
+
 #ifdef CONFIG_DEBUG_STACK_USAGE
 static __thread unsigned int max_stack_usage;
 #endif
-#endif
+
 void qemu_free_stack(void *stack, size_t sz)
 {
 #ifdef CONFIG_DEBUG_STACK_USAGE

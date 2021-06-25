@@ -20,7 +20,7 @@ objects_seen = set()
 
 
 def gen_fwd_object_or_array(name):
-    return mcgen(u'''
+    return mcgen('''
 
 typedef struct %(c_name)s %(c_name)s;
 ''',
@@ -28,7 +28,7 @@ typedef struct %(c_name)s %(c_name)s;
 
 
 def gen_array(name, element_type):
-    return mcgen(u'''
+    return mcgen('''
 
 struct %(c_name)s {
     %(c_name)s *next;
@@ -42,11 +42,11 @@ def gen_struct_members(members):
     ret = ''
     for memb in members:
         if memb.optional:
-            ret += mcgen(u'''
+            ret += mcgen('''
     bool has_%(c_name)s;
 ''',
                          c_name=c_name(memb.name))
-        ret += mcgen(u'''
+        ret += mcgen('''
     %(c_type)s %(c_name)s;
 ''',
                      c_type=memb.type.c_type(), c_name=c_name(memb.name))
@@ -65,7 +65,7 @@ def gen_object(name, base, members, variants):
                 ret += gen_object(v.type.name, v.type.base,
                                   v.type.local_members, v.type.variants)
 
-    ret += mcgen(u'''
+    ret += mcgen('''
 
 struct %(c_name)s {
 ''',
@@ -73,13 +73,13 @@ struct %(c_name)s {
 
     if base:
         if not base.is_implicit():
-            ret += mcgen(u'''
+            ret += mcgen('''
     /* Members inherited from %(c_name)s: */
 ''',
                          c_name=base.c_name())
         ret += gen_struct_members(base.members)
         if not base.is_implicit():
-            ret += mcgen(u'''
+            ret += mcgen('''
     /* Own members: */
 ''')
     ret += gen_struct_members(members)
@@ -92,11 +92,11 @@ struct %(c_name)s {
     # structs in C, and also incompatibility with C++ (where an empty
     # struct is size 1).
     if (not base or base.is_empty()) and not members and not variants:
-        ret += mcgen(u'''
+        ret += mcgen('''
     char qapi_dummy_for_empty_struct;
 ''')
 
-    ret += mcgen(u'''
+    ret += mcgen('''
 };
 ''')
 
@@ -106,7 +106,7 @@ struct %(c_name)s {
 def gen_upcast(name, base):
     # C makes const-correctness ugly.  We have to cast away const to let
     # this function work for both const and non-const obj.
-    return mcgen(u'''
+    return mcgen('''
 
 static inline %(base)s *qapi_%(c_name)s_base(const %(c_name)s *obj)
 {
@@ -117,19 +117,19 @@ static inline %(base)s *qapi_%(c_name)s_base(const %(c_name)s *obj)
 
 
 def gen_variants(variants):
-    ret = mcgen(u'''
+    ret = mcgen('''
     union { /* union tag is @%(c_name)s */
 ''',
                 c_name=c_name(variants.tag_member.name))
 
     for var in variants.variants:
-        ret += mcgen(u'''
+        ret += mcgen('''
         %(c_type)s %(c_name)s;
 ''',
                      c_type=var.type.c_unboxed_type(),
                      c_name=c_name(var.name))
 
-    ret += mcgen(u'''
+    ret += mcgen('''
     } u;
 ''')
 
@@ -137,7 +137,7 @@ def gen_variants(variants):
 
 
 def gen_type_cleanup_decl(name):
-    ret = mcgen(u'''
+    ret = mcgen('''
 
 void qapi_free_%(c_name)s(%(c_name)s *obj);
 ''',
@@ -146,7 +146,7 @@ void qapi_free_%(c_name)s(%(c_name)s *obj);
 
 
 def gen_type_cleanup(name):
-    ret = mcgen(u'''
+    ret = mcgen('''
 
 void qapi_free_%(c_name)s(%(c_name)s *obj)
 {
@@ -284,7 +284,7 @@ h_comment = '''
                             'qapi-types.c', 'qapi-types.h',
                             c_comment, h_comment)
 
-fdef.write(mcgen(u'''
+fdef.write(mcgen('''
 #include "qemu/osdep.h"
 #include "qapi/dealloc-visitor.h"
 #include "%(prefix)sqapi-types.h"
@@ -292,7 +292,7 @@ fdef.write(mcgen(u'''
 ''',
                  prefix=prefix))
 
-fdecl.write(mcgen(u'''
+fdecl.write(mcgen('''
 #include "qapi/util.h"
 '''))
 

@@ -21,7 +21,7 @@ def build_event_send_proto(name, arg_type, boxed):
 
 
 def gen_event_send_decl(name, arg_type, boxed):
-    return mcgen(u'''
+    return mcgen('''
 
 %(proto)s;
 ''',
@@ -31,7 +31,7 @@ def gen_event_send_decl(name, arg_type, boxed):
 # Declare and initialize an object 'qapi' using parameters from build_params()
 def gen_param_var(typ):
     assert not typ.variants
-    ret = mcgen(u'''
+    ret = mcgen('''
     %(c_name)s param = {
 ''',
                 c_name=typ.c_name())
@@ -45,12 +45,12 @@ def gen_param_var(typ):
             # Cast away const added in build_params()
             ret += '(char *)'
         ret += c_name(memb.name)
-    ret += mcgen(u'''
+    ret += mcgen('''
 
     };
 ''')
     if not typ.is_implicit():
-        ret += mcgen(u'''
+        ret += mcgen('''
     %(c_name)s *arg = &param;
 ''',
                      c_name=typ.c_name())
@@ -64,7 +64,7 @@ def gen_event_send(name, arg_type, boxed):
     # practice, we can rename our local variables with a leading _ prefix,
     # or split the code into a wrapper function that creates a boxed
     # 'param' object then calls another to do the real work.
-    ret = mcgen(u'''
+    ret = mcgen('''
 
 %(proto)s
 {
@@ -75,7 +75,7 @@ def gen_event_send(name, arg_type, boxed):
                 proto=build_event_send_proto(name, arg_type, boxed))
 
     if arg_type and not arg_type.is_empty():
-        ret += mcgen(u'''
+        ret += mcgen('''
     QObject *obj;
     Visitor *v;
 ''')
@@ -84,7 +84,7 @@ def gen_event_send(name, arg_type, boxed):
     else:
         assert not boxed
 
-    ret += mcgen(u'''
+    ret += mcgen('''
 
     emit = qmp_event_get_func_emit();
     if (!emit) {
@@ -97,16 +97,16 @@ def gen_event_send(name, arg_type, boxed):
                  name=name)
 
     if arg_type and not arg_type.is_empty():
-        ret += mcgen(u'''
+        ret += mcgen('''
     v = qobject_output_visitor_new(&obj);
 ''')
         if not arg_type.is_implicit():
-            ret += mcgen(u'''
+            ret += mcgen('''
     visit_type_%(c_name)s(v, "%(name)s", &arg, &err);
 ''',
                          name=name, c_name=arg_type.c_name())
         else:
-            ret += mcgen(u'''
+            ret += mcgen('''
 
     visit_start_struct(v, "%(name)s", NULL, 0, &err);
     if (err) {
@@ -119,7 +119,7 @@ def gen_event_send(name, arg_type, boxed):
     visit_end_struct(v, NULL);
 ''',
                          name=name, c_name=arg_type.c_name())
-        ret += mcgen(u'''
+        ret += mcgen('''
     if (err) {
         goto out;
     }
@@ -128,18 +128,18 @@ def gen_event_send(name, arg_type, boxed):
     qdict_put_obj(qmp, "data", obj);
 ''')
 
-    ret += mcgen(u'''
+    ret += mcgen('''
     emit(%(c_enum)s, qmp, &err);
 
 ''',
                  c_enum=c_enum_const(event_enum_name, name))
 
     if arg_type and not arg_type.is_empty():
-        ret += mcgen(u'''
+        ret += mcgen('''
 out:
     visit_free(v);
 ''')
-    ret += mcgen(u'''
+    ret += mcgen('''
     error_propagate(errp, err);
     QDECREF(qmp);
 }
@@ -204,7 +204,7 @@ h_comment = '''
                             'qapi-event.c', 'qapi-event.h',
                             c_comment, h_comment)
 
-fdef.write(mcgen(u'''
+fdef.write(mcgen('''
 #include "qemu/osdep.h"
 #include "qemu-common.h"
 #include "%(prefix)sqapi-event.h"
@@ -215,7 +215,7 @@ fdef.write(mcgen(u'''
 ''',
                  prefix=prefix))
 
-fdecl.write(mcgen(u'''
+fdecl.write(mcgen('''
 #include "qapi/error.h"
 #include "qapi/util.h"
 #include "qapi/qmp/qdict.h"

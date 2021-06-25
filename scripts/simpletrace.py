@@ -36,7 +36,7 @@ def read_header(fobj, hfmt):
 def get_record(edict, idtoname, rechdr, fobj):
     """Deserialize a trace record from a file into a tuple
        (name, timestamp, pid, arg1, ..., arg6)."""
-    if rechdr == None:
+    if rechdr is None:
         return None
     if rechdr[0] != dropped_event_id:
         event_id = rechdr[0]
@@ -44,7 +44,7 @@ def get_record(edict, idtoname, rechdr, fobj):
         rec = (name, rechdr[1], rechdr[3])
         try:
             event = edict[name]
-        except KeyError as e:
+        except KeyError, e:
             import sys
             sys.stderr.write('%s event is logged but is not declared ' \
                              'in the trace events file, try using ' \
@@ -257,6 +257,6 @@ if __name__ == '__main__':
                 else:
                     fields.append('%s=0x%x' % (name, rec[i]))
                 i += 1
-            print(' '.join(fields))
+            print ' '.join(fields)
 
     run(Formatter())

@@ -17,8 +17,6 @@
 # License along with this library; if not, see <http://www.gnu.org/licenses/>.
 #
 
-from __future__ import print_function
-
 import sys
 
 
@@ -357,7 +355,7 @@ class Plot(object):
             if progress._status not in annotations:
                 annotations[progress._status] = self._generate_annotation(starttime, progress)
 
-        return list(annotations.values())
+        return annotations.values()
 
     def _generate_chart(self):
         from plotly.offline import plot
@@ -590,7 +588,7 @@ class Plot(object):
 """
 
     def generate_html(self, fh):
-        print("""<html>
+        print >>fh, """<html>
   <head>
     <script type="text/javascript" src="plotly.min.js">
     </script>
@@ -603,19 +601,19 @@ class Plot(object):
     <h1>Migration report</h1>
     <h2>Chart summary</h2>
     <div id="chart">
-""" % self._generate_style(), file=fh)
-        print(self._generate_chart(), file=fh)
-        print("""
+""" % self._generate_style()
+        print >>fh, self._generate_chart()
+        print >>fh, """
     </div>
     <h2>Report details</h2>
     <div id="report">
-""", file=fh)
-        print(self._generate_report(), file=fh)
-        print("""
+"""
+        print >>fh, self._generate_report()
+        print >>fh, """
     </div>
   </body>
 </html>
-""", file=fh)
+"""
 
     def generate(self, filename):
         if filename is None:

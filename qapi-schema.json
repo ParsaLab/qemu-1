@@ -92,7 +92,6 @@
 { 'include': 'qapi/transaction.json' }
 { 'include': 'qapi/trace.json' }
 { 'include': 'qapi/introspect.json' }
-{ 'include': 'qapi/flexus.json' }
 
 ##
 # = Miscellanea
@@ -1075,99 +1074,6 @@
 #
 ##
 { 'command': 'cpu-add', 'data': {'id': 'int'} }
-
-##
-# @QuantumInfo:
-#
-# Guest Quantum information.
-#
-# @quantum-core: The Quantum of the each of guests vcpus
-# @quantum-record: The record value for quantum
-# @quantum-node: The Quantum of the guest
-#
-# Since: 2.9.5
-##
-{ 'struct': 'QuantumInfo', 'data': {'quantum-core': 'uint64', 'quantum-record': 'uint64', 'quantum-node': 'uint64'} }
-
-##
-# @DbgData:
-#
-# per VCPU DEBUG information.
-#
-# @instr: CPU DEBUG data
-# @mips: CPU DEBUG data
-# @data: CPU DEBUG data
-# @time: CPU DEBUG data
-#
-# Since: 2.9.5
-##
-{ 'struct': 'DbgData', 'data': {'instr': 'uint64','mips': 'int','*data': 'str','*time':'str'} }
-
-##
-# @DbgDataAll:
-#
-# Guest CPU DEBUG information.
-#
-# @data: The CPU DEBUG of the guest
-# @size: num cpus
-#
-# Since: 2.9.5
-##
-{ 'struct': 'DbgDataAll', 'data': {'*data': 'DbgData', 'size':'int'} }
-
-##
-# @quantum-get-all:
-#
-# query quantum value
-#
-# Since: 2.6 - PARSALAB
-##
-{ 'command': 'quantum-get-all', 'returns':'QuantumInfo' }
-
-##
-# @quantum-core-set:
-#
-# set quantum value for vcpu cores
-#
-# Since: 2.6 - PARSALAB
-##
-{ 'command': 'quantum-core-set', 'data': {'val': 'uint64'} }
-
-##
-# @quantum-node-set:
-#
-# set quantum value for the whole node
-#
-# Since: 2.6 - PARSALAB
-##
-{ 'command': 'quantum-node-set', 'data': {'val': 'uint64'} }
-
-##
-# @cpu-dbg:
-#
-# Get number of instructions exececuted by each CPU
-#
-# Since: 2.6 - PARSALAB
-##
-{ 'command': 'cpu-dbg', 'returns': 'DbgDataAll' }
-
-##
-# @cpu-zero-all:
-#
-# Zero out number of instructions exececuted, debug information
-#
-# Since: 2.6 - PARSALAB
-##
-{ 'command': 'cpu-zero-all' }
-
-##
-# @quantum-pause:
-#
-# pause after core quantum
-#
-# Since: 2.10 - PARSALAB
-##
-{ 'command': 'quantum-pause' }
 
 ##
 # @memsave:

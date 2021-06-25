@@ -1,47 +1,3 @@
-//  DO-NOT-REMOVE begin-copyright-block
-// QFlex consists of several software components that are governed by various
-// licensing terms, in addition to software that was developed internally.
-// Anyone interested in using QFlex needs to fully understand and abide by the
-// licenses governing all the software components.
-// 
-// ### Software developed externally (not by the QFlex group)
-// 
-//     * [NS-3] (https://www.gnu.org/copyleft/gpl.html)
-//     * [QEMU] (http://wiki.qemu.org/License)
-//     * [SimFlex] (http://parsa.epfl.ch/simflex/)
-//     * [GNU PTH] (https://www.gnu.org/software/pth/)
-// 
-// ### Software developed internally (by the QFlex group)
-// **QFlex License**
-// 
-// QFlex
-// Copyright (c) 2020, Parallel Systems Architecture Lab, EPFL
-// All rights reserved.
-// 
-// Redistribution and use in source and binary forms, with or without modification,
-// are permitted provided that the following conditions are met:
-// 
-//     * Redistributions of source code must retain the above copyright notice,
-//       this list of conditions and the following disclaimer.
-//     * Redistributions in binary form must reproduce the above copyright notice,
-//       this list of conditions and the following disclaimer in the documentation
-//       and/or other materials provided with the distribution.
-//     * Neither the name of the Parallel Systems Architecture Laboratory, EPFL,
-//       nor the names of its contributors may be used to endorse or promote
-//       products derived from this software without specific prior written
-//       permission.
-// 
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
-// ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
-// WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-// DISCLAIMED. IN NO EVENT SHALL THE PARALLEL SYSTEMS ARCHITECTURE LABORATORY,
-// EPFL BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
-// GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
-// HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
-// LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
-// THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-//  DO-NOT-REMOVE end-copyright-block
 /*
  * QEMU LSI SAS1068 Host Bus Adapter emulation
  * Endianness conversion for MPI data structures
@@ -80,152 +36,152 @@
 
 static void mptsas_fix_sgentry_endianness(MPISGEntry *sge)
 {
-    sge->FlagsLength = le32_to_cpu(sge->FlagsLength);
+    le32_to_cpus(&sge->FlagsLength);
     if (sge->FlagsLength & MPI_SGE_FLAGS_64_BIT_ADDRESSING) {
-       sge->u.Address64 = le64_to_cpu(sge->u.Address64);
+       le64_to_cpus(&sge->u.Address64);
     } else {
-       sge->u.Address32 = le32_to_cpu(sge->u.Address32);
+       le32_to_cpus(&sge->u.Address32);
     }
 }
 
 static void mptsas_fix_sgentry_endianness_reply(MPISGEntry *sge)
 {
     if (sge->FlagsLength & MPI_SGE_FLAGS_64_BIT_ADDRESSING) {
-       sge->u.Address64 = cpu_to_le64(sge->u.Address64);
+       cpu_to_le64s(&sge->u.Address64);
     } else {
-       sge->u.Address32 = cpu_to_le32(sge->u.Address32);
+       cpu_to_le32s(&sge->u.Address32);
     }
-    sge->FlagsLength = cpu_to_le32(sge->FlagsLength);
+    cpu_to_le32s(&sge->FlagsLength);
 }
 
 void mptsas_fix_scsi_io_endianness(MPIMsgSCSIIORequest *req)
 {
-    req->MsgContext = le32_to_cpu(req->MsgContext);
-    req->Control = le32_to_cpu(req->Control);
-    req->DataLength = le32_to_cpu(req->DataLength);
-    req->SenseBufferLowAddr = le32_to_cpu(req->SenseBufferLowAddr);
+    le32_to_cpus(&req->MsgContext);
+    le32_to_cpus(&req->Control);
+    le32_to_cpus(&req->DataLength);
+    le32_to_cpus(&req->SenseBufferLowAddr);
 }
 
 void mptsas_fix_scsi_io_reply_endianness(MPIMsgSCSIIOReply *reply)
 {
-    reply->MsgContext = cpu_to_le32(reply->MsgContext);
-    reply->IOCStatus = cpu_to_le16(reply->IOCStatus);
-    reply->IOCLogInfo = cpu_to_le32(reply->IOCLogInfo);
-    reply->TransferCount = cpu_to_le32(reply->TransferCount);
-    reply->SenseCount = cpu_to_le32(reply->SenseCount);
-    reply->ResponseInfo = cpu_to_le32(reply->ResponseInfo);
-    reply->TaskTag = cpu_to_le16(reply->TaskTag);
+    cpu_to_le32s(&reply->MsgContext);
+    cpu_to_le16s(&reply->IOCStatus);
+    cpu_to_le32s(&reply->IOCLogInfo);
+    cpu_to_le32s(&reply->TransferCount);
+    cpu_to_le32s(&reply->SenseCount);
+    cpu_to_le32s(&reply->ResponseInfo);
+    cpu_to_le16s(&reply->TaskTag);
 }
 
 void mptsas_fix_scsi_task_mgmt_endianness(MPIMsgSCSITaskMgmt *req)
 {
-    req->MsgContext = le32_to_cpu(req->MsgContext);
-    req->TaskMsgContext = le32_to_cpu(req->TaskMsgContext);
+    le32_to_cpus(&req->MsgContext);
+    le32_to_cpus(&req->TaskMsgContext);
 }
 
 void mptsas_fix_scsi_task_mgmt_reply_endianness(MPIMsgSCSITaskMgmtReply *reply)
 {
-    reply->MsgContext = cpu_to_le32(reply->MsgContext);
-    reply->IOCStatus = cpu_to_le16(reply->IOCStatus);
-    reply->IOCLogInfo = cpu_to_le32(reply->IOCLogInfo);
-    reply->TerminationCount = cpu_to_le32(reply->TerminationCount);
+    cpu_to_le32s(&reply->MsgContext);
+    cpu_to_le16s(&reply->IOCStatus);
+    cpu_to_le32s(&reply->IOCLogInfo);
+    cpu_to_le32s(&reply->TerminationCount);
 }
 
 void mptsas_fix_ioc_init_endianness(MPIMsgIOCInit *req)
 {
-    req->MsgContext = le32_to_cpu(req->MsgContext);
-    req->ReplyFrameSize = le16_to_cpu(req->ReplyFrameSize);
-    req->HostMfaHighAddr = le32_to_cpu(req->HostMfaHighAddr);
-    req->SenseBufferHighAddr = le32_to_cpu(req->SenseBufferHighAddr);
-    req->ReplyFifoHostSignalingAddr = le32_to_cpu(req->ReplyFifoHostSignalingAddr);
+    le32_to_cpus(&req->MsgContext);
+    le16_to_cpus(&req->ReplyFrameSize);
+    le32_to_cpus(&req->HostMfaHighAddr);
+    le32_to_cpus(&req->SenseBufferHighAddr);
+    le32_to_cpus(&req->ReplyFifoHostSignalingAddr);
     mptsas_fix_sgentry_endianness(&req->HostPageBufferSGE);
-    req->MsgVersion = le16_to_cpu(req->MsgVersion);
-    req->HeaderVersion = le16_to_cpu(req->HeaderVersion);
+    le16_to_cpus(&req->MsgVersion);
+    le16_to_cpus(&req->HeaderVersion);
 }
 
 void mptsas_fix_ioc_init_reply_endianness(MPIMsgIOCInitReply *reply)
 {
-    reply->MsgContext = cpu_to_le32(reply->MsgContext);
-    reply->IOCStatus = cpu_to_le16(reply->IOCStatus);
-    reply->IOCLogInfo = cpu_to_le32(reply->IOCLogInfo);
+    cpu_to_le32s(&reply->MsgContext);
+    cpu_to_le16s(&reply->IOCStatus);
+    cpu_to_le32s(&reply->IOCLogInfo);
 }
 
 void mptsas_fix_ioc_facts_endianness(MPIMsgIOCFacts *req)
 {
-    req->MsgContext = le32_to_cpu(req->MsgContext);
+    le32_to_cpus(&req->MsgContext);
 }
 
 void mptsas_fix_ioc_facts_reply_endianness(MPIMsgIOCFactsReply *reply)
 {
-    reply->MsgVersion = cpu_to_le16(reply->MsgVersion);
-    reply->HeaderVersion = cpu_to_le16(reply->HeaderVersion);
-    reply->MsgContext = cpu_to_le32(reply->MsgContext);
-    reply->IOCExceptions = cpu_to_le16(reply->IOCExceptions);
-    reply->IOCStatus = cpu_to_le16(reply->IOCStatus);
-    reply->IOCLogInfo = cpu_to_le32(reply->IOCLogInfo);
-    reply->ReplyQueueDepth = cpu_to_le16(reply->ReplyQueueDepth);
-    reply->RequestFrameSize = cpu_to_le16(reply->RequestFrameSize);
-    reply->ProductID = cpu_to_le16(reply->ProductID);
-    reply->CurrentHostMfaHighAddr = cpu_to_le32(reply->CurrentHostMfaHighAddr);
-    reply->GlobalCredits = cpu_to_le16(reply->GlobalCredits);
-    reply->CurrentSenseBufferHighAddr = cpu_to_le32(reply->CurrentSenseBufferHighAddr);
-    reply->CurReplyFrameSize = cpu_to_le16(reply->CurReplyFrameSize);
-    reply->FWImageSize = cpu_to_le32(reply->FWImageSize);
-    reply->IOCCapabilities = cpu_to_le32(reply->IOCCapabilities);
-    reply->HighPriorityQueueDepth = cpu_to_le16(reply->HighPriorityQueueDepth);
+    cpu_to_le16s(&reply->MsgVersion);
+    cpu_to_le16s(&reply->HeaderVersion);
+    cpu_to_le32s(&reply->MsgContext);
+    cpu_to_le16s(&reply->IOCExceptions);
+    cpu_to_le16s(&reply->IOCStatus);
+    cpu_to_le32s(&reply->IOCLogInfo);
+    cpu_to_le16s(&reply->ReplyQueueDepth);
+    cpu_to_le16s(&reply->RequestFrameSize);
+    cpu_to_le16s(&reply->ProductID);
+    cpu_to_le32s(&reply->CurrentHostMfaHighAddr);
+    cpu_to_le16s(&reply->GlobalCredits);
+    cpu_to_le32s(&reply->CurrentSenseBufferHighAddr);
+    cpu_to_le16s(&reply->CurReplyFrameSize);
+    cpu_to_le32s(&reply->FWImageSize);
+    cpu_to_le32s(&reply->IOCCapabilities);
+    cpu_to_le16s(&reply->HighPriorityQueueDepth);
     mptsas_fix_sgentry_endianness_reply(&reply->HostPageBufferSGE);
-    reply->ReplyFifoHostSignalingAddr = cpu_to_le32(reply->ReplyFifoHostSignalingAddr);
+    cpu_to_le32s(&reply->ReplyFifoHostSignalingAddr);
 }
 
 void mptsas_fix_config_endianness(MPIMsgConfig *req)
 {
-    req->ExtPageLength = le16_to_cpu(req->ExtPageLength);
-    req->MsgContext = le32_to_cpu(req->MsgContext);
-    req->PageAddress = le32_to_cpu(req->PageAddress);
+    le16_to_cpus(&req->ExtPageLength);
+    le32_to_cpus(&req->MsgContext);
+    le32_to_cpus(&req->PageAddress);
     mptsas_fix_sgentry_endianness(&req->PageBufferSGE);
 }
 
 void mptsas_fix_config_reply_endianness(MPIMsgConfigReply *reply)
 {
-    reply->ExtPageLength = cpu_to_le16(reply->ExtPageLength);
-    reply->MsgContext = cpu_to_le32(reply->MsgContext);
-    reply->IOCStatus = cpu_to_le16(reply->IOCStatus);
-    reply->IOCLogInfo = cpu_to_le32(reply->IOCLogInfo);
+    cpu_to_le16s(&reply->ExtPageLength);
+    cpu_to_le32s(&reply->MsgContext);
+    cpu_to_le16s(&reply->IOCStatus);
+    cpu_to_le32s(&reply->IOCLogInfo);
 }
 
 void mptsas_fix_port_facts_endianness(MPIMsgPortFacts *req)
 {
-    req->MsgContext = le32_to_cpu(req->MsgContext);
+    le32_to_cpus(&req->MsgContext);
 }
 
 void mptsas_fix_port_facts_reply_endianness(MPIMsgPortFactsReply *reply)
 {
-    reply->MsgContext = cpu_to_le32(reply->MsgContext);
-    reply->IOCStatus = cpu_to_le16(reply->IOCStatus);
-    reply->IOCLogInfo = cpu_to_le32(reply->IOCLogInfo);
-    reply->MaxDevices = cpu_to_le16(reply->MaxDevices);
-    reply->PortSCSIID = cpu_to_le16(reply->PortSCSIID);
-    reply->ProtocolFlags = cpu_to_le16(reply->ProtocolFlags);
-    reply->MaxPostedCmdBuffers = cpu_to_le16(reply->MaxPostedCmdBuffers);
-    reply->MaxPersistentIDs = cpu_to_le16(reply->MaxPersistentIDs);
-    reply->MaxLanBuckets = cpu_to_le16(reply->MaxLanBuckets);
+    cpu_to_le32s(&reply->MsgContext);
+    cpu_to_le16s(&reply->IOCStatus);
+    cpu_to_le32s(&reply->IOCLogInfo);
+    cpu_to_le16s(&reply->MaxDevices);
+    cpu_to_le16s(&reply->PortSCSIID);
+    cpu_to_le16s(&reply->ProtocolFlags);
+    cpu_to_le16s(&reply->MaxPostedCmdBuffers);
+    cpu_to_le16s(&reply->MaxPersistentIDs);
+    cpu_to_le16s(&reply->MaxLanBuckets);
 }
 
 void mptsas_fix_port_enable_endianness(MPIMsgPortEnable *req)
 {
-    req->MsgContext = le32_to_cpu(req->MsgContext);
+    le32_to_cpus(&req->MsgContext);
 }
 
 void mptsas_fix_port_enable_reply_endianness(MPIMsgPortEnableReply *reply)
 {
-    reply->MsgContext = cpu_to_le32(reply->MsgContext);
-    reply->IOCStatus = cpu_to_le16(reply->IOCStatus);
-    reply->IOCLogInfo = cpu_to_le32(reply->IOCLogInfo);
+    cpu_to_le32s(&reply->MsgContext);
+    cpu_to_le16s(&reply->IOCStatus);
+    cpu_to_le32s(&reply->IOCLogInfo);
 }
 
 void mptsas_fix_event_notification_endianness(MPIMsgEventNotify *req)
 {
-    req->MsgContext = le32_to_cpu(req->MsgContext);
+    le32_to_cpus(&req->MsgContext);
 }
 
 void mptsas_fix_event_notification_reply_endianness(MPIMsgEventNotifyReply *reply)
@@ -233,16 +189,16 @@ void mptsas_fix_event_notification_reply_endianness(MPIMsgEventNotifyReply *repl
     int length = reply->EventDataLength;
     int i;
 
-    reply->EventDataLength = cpu_to_le16(reply->EventDataLength);
-    reply->MsgContext = cpu_to_le32(reply->MsgContext);
-    reply->IOCStatus = cpu_to_le16(reply->IOCStatus);
-    reply->IOCLogInfo = cpu_to_le32(reply->IOCLogInfo);
-    reply->Event = cpu_to_le32(reply->Event);
-    reply->EventContext = cpu_to_le32(reply->EventContext);
+    cpu_to_le16s(&reply->EventDataLength);
+    cpu_to_le32s(&reply->MsgContext);
+    cpu_to_le16s(&reply->IOCStatus);
+    cpu_to_le32s(&reply->IOCLogInfo);
+    cpu_to_le32s(&reply->Event);
+    cpu_to_le32s(&reply->EventContext);
 
     /* Really depends on the event kind.  This will do for now.  */
     for (i = 0; i < length; i++) {
-        reply->Data[i] = cpu_to_le32(reply->Data[i]);
+        cpu_to_le32s(&reply->Data[i]);
     }
 }
 

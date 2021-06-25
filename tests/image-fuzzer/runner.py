@@ -18,8 +18,6 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #
 
-from __future__ import print_function
-
 import sys
 import os
 import signal
@@ -29,12 +27,7 @@ import shutil
 from itertools import count
 import time
 import getopt
-
-try:
-    import io
-except ImportError:
-    # Python 2 fallback
-    import StringIO as io
+import StringIO
 import resource
 
 try:
@@ -43,8 +36,9 @@ except ImportError:
     try:
         import simplejson as json
     except ImportError:
-        print("Warning: Module for JSON processing is not found.\n" \
-            "'--config' and '--command' options are not supported.", file=sys.stderr)
+        print >>sys.stderr, \
+            "Warning: Module for JSON processing is not found.\n" \
+            "'--config' and '--command' options are not supported."
 
 # Backing file sizes in MB
 MAX_BACKING_FILE_SIZE = 10
@@ -134,7 +128,7 @@ class TestEnv(object):
         if seed is not None:
             self.seed = seed
         else:
-            self.seed = str(random.randint(0, sys.maxsize))
+            self.seed = str(random.randint(0, sys.maxint))
         random.seed(self.seed)
 
         self.init_path = os.getcwd()
@@ -164,8 +158,9 @@ class TestEnv(object):
         try:
             os.makedirs(self.current_dir)
         except OSError as e:
-            print("Error: The working directory '%s' cannot be used. Reason: %s"\
-                % (self.work_dir, e[1]), file=sys.stderr)
+            print >>sys.stderr, \
+                "Error: The working directory '%s' cannot be used. Reason: %s"\
+                % (self.work_dir, e[1])
             raise TestException
         self.log = open(os.path.join(self.current_dir, "test.log"), "w")
         self.parent_log = open(run_log, "a")
@@ -189,7 +184,7 @@ class TestEnv(object):
                                            MAX_BACKING_FILE_SIZE) * (1 << 20)
         cmd = self.qemu_img + ['create', '-f', backing_file_fmt,
                                backing_file_name, str(backing_file_size)]
-        temp_log = io.StringIO()
+        temp_log = StringIO.StringIO()
         retcode = run_app(temp_log, cmd)
         if retcode == 0:
             temp_log.close()
@@ -246,7 +241,7 @@ class TestEnv(object):
                            "Backing file: %s\n" \
                            % (self.seed, " ".join(current_cmd),
                               self.current_dir, backing_file_name)
-            temp_log = io.StringIO()
+            temp_log = StringIO.StringIO()
             try:
                 retcode = run_app(temp_log, current_cmd)
             except OSError as e:
@@ -282,7 +277,7 @@ class TestEnv(object):
 if __name__ == '__main__':
 
     def usage():
-        print("""
+        print """
         Usage: runner.py [OPTION...] TEST_DIR IMG_GENERATOR
 
         Set up test environment in TEST_DIR and run a test in it. A module for
@@ -331,7 +326,7 @@ if __name__ == '__main__':
 
         If '--config' argument is specified, fields not listed in
         the configuration array will not be fuzzed.
-        """)
+        """
 
     def run_test(test_id, seed, work_dir, run_log, cleanup, log_all,
                  command, fuzz_config):
@@ -362,7 +357,8 @@ if __name__ == '__main__':
                                        ['command=', 'help', 'seed=', 'config=',
                                         'keep_passed', 'verbose', 'duration='])
     except getopt.error as e:
-        print("Error: %s\n\nTry 'runner.py --help' for more information" % e, file=sys.stderr)
+        print >>sys.stderr, \
+            "Error: %s\n\nTry 'runner.py --help' for more information" % e
         sys.exit(1)
 
     command = None
@@ -379,8 +375,9 @@ if __name__ == '__main__':
             try:
                 command = json.loads(arg)
             except (TypeError, ValueError, NameError) as e:
-                print("Error: JSON array of test commands cannot be loaded.\n" \
-                    "Reason: %s" % e, file=sys.stderr)
+                print >>sys.stderr, \
+                    "Error: JSON array of test commands cannot be loaded.\n" \
+                    "Reason: %s" % e
                 sys.exit(1)
         elif opt in ('-k', '--keep_passed'):
             cleanup = False
@@ -394,13 +391,15 @@ if __name__ == '__main__':
             try:
                 config = json.loads(arg)
             except (TypeError, ValueError, NameError) as e:
-                print("Error: JSON array with the fuzzer configuration cannot" \
-                    " be loaded\nReason: %s" % e, file=sys.stderr)
+                print >>sys.stderr, \
+                    "Error: JSON array with the fuzzer configuration cannot" \
+                    " be loaded\nReason: %s" % e
                 sys.exit(1)
 
     if not len(args) == 2:
-        print("Expected two parameters\nTry 'runner.py --help'" \
-            " for more information.", file=sys.stderr)
+        print >>sys.stderr, \
+            "Expected two parameters\nTry 'runner.py --help'" \
+            " for more information."
         sys.exit(1)
 
     work_dir = os.path.realpath(args[0])
@@ -416,8 +415,9 @@ if __name__ == '__main__':
     try:
         image_generator = __import__(generator_name)
     except ImportError as e:
-        print("Error: The image generator '%s' cannot be imported.\n" \
-            "Reason: %s" % (generator_name, e), file=sys.stderr)
+        print >>sys.stderr, \
+            "Error: The image generator '%s' cannot be imported.\n" \
+            "Reason: %s" % (generator_name, e)
         sys.exit(1)
 
     # Enable core dumps
@@ -428,7 +428,7 @@ if __name__ == '__main__':
     test_id = count(1)
     while should_continue(duration, start_time):
         try:
-            run_test(str(next(test_id)), seed, work_dir, run_log, cleanup,
+            run_test(str(test_id.next()), seed, work_dir, run_log, cleanup,
                      log_all, command, config)
         except (KeyboardInterrupt, SystemExit):
             sys.exit(1)

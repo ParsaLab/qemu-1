@@ -1,47 +1,3 @@
-//  DO-NOT-REMOVE begin-copyright-block
-// QFlex consists of several software components that are governed by various
-// licensing terms, in addition to software that was developed internally.
-// Anyone interested in using QFlex needs to fully understand and abide by the
-// licenses governing all the software components.
-// 
-// ### Software developed externally (not by the QFlex group)
-// 
-//     * [NS-3] (https://www.gnu.org/copyleft/gpl.html)
-//     * [QEMU] (http://wiki.qemu.org/License)
-//     * [SimFlex] (http://parsa.epfl.ch/simflex/)
-//     * [GNU PTH] (https://www.gnu.org/software/pth/)
-// 
-// ### Software developed internally (by the QFlex group)
-// **QFlex License**
-// 
-// QFlex
-// Copyright (c) 2020, Parallel Systems Architecture Lab, EPFL
-// All rights reserved.
-// 
-// Redistribution and use in source and binary forms, with or without modification,
-// are permitted provided that the following conditions are met:
-// 
-//     * Redistributions of source code must retain the above copyright notice,
-//       this list of conditions and the following disclaimer.
-//     * Redistributions in binary form must reproduce the above copyright notice,
-//       this list of conditions and the following disclaimer in the documentation
-//       and/or other materials provided with the distribution.
-//     * Neither the name of the Parallel Systems Architecture Laboratory, EPFL,
-//       nor the names of its contributors may be used to endorse or promote
-//       products derived from this software without specific prior written
-//       permission.
-// 
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
-// ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
-// WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-// DISCLAIMED. IN NO EVENT SHALL THE PARALLEL SYSTEMS ARCHITECTURE LABORATORY,
-// EPFL BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
-// GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
-// HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
-// LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
-// THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-//  DO-NOT-REMOVE end-copyright-block
 /*
  * QEMU aio implementation
  *
@@ -156,12 +112,10 @@ static int aio_epoll(AioContext *ctx, GPollFD *pfds,
     int i, ret = 0;
     struct epoll_event events[128];
 
-    PTH_UPDATE_CONTEXT
-
-    assert(PTH(npfd) == 1);
+    assert(npfd == 1);
     assert(pfds[0].fd == ctx->epollfd);
     if (timeout > 0) {
-        ret = qemu_poll_ns(pfds, PTH(npfd), timeout);
+        ret = qemu_poll_ns(pfds, npfd, timeout);
     }
     if (timeout <= 0 || ret > 0) {
         ret = epoll_wait(ctx->epollfd, events,
@@ -192,15 +146,13 @@ static bool aio_epoll_enabled(AioContext *ctx)
 static bool aio_epoll_check_poll(AioContext *ctx, GPollFD *pfds,
                                  unsigned npfd, int64_t timeout)
 {
-    PTH_UPDATE_CONTEXT
-
     if (!ctx->epoll_available) {
         return false;
     }
     if (aio_epoll_enabled(ctx)) {
         return true;
     }
-    if (PTH(npfd) >= EPOLL_ENABLE_THRESHOLD) {
+    if (npfd >= EPOLL_ENABLE_THRESHOLD) {
         if (aio_epoll_try_enable(ctx)) {
             return true;
         } else {
@@ -499,43 +451,39 @@ void aio_dispatch(AioContext *ctx)
  * any lock, the arrays cannot be stored in AioContext.  Thread-local data
  * has none of the disadvantages of these three options.
  */
-#ifndef CONFIG_PTH
 static __thread GPollFD *pollfds;
 static __thread AioHandler **nodes;
 static __thread unsigned npfd, nalloc;
 static __thread Notifier pollfds_cleanup_notifier;
-#endif
+
 static void pollfds_cleanup(Notifier *n, void *unused)
 {
-    PTH_UPDATE_CONTEXT
-    g_assert(PTH(npfd) == 0);
-    g_free(PTH(pollfds));
-    g_free(PTH(nodes));
-    PTH(nalloc) = 0;
+    g_assert(npfd == 0);
+    g_free(pollfds);
+    g_free(nodes);
+    nalloc = 0;
 }
 
 static void add_pollfd(AioHandler *node)
 {
-    PTH_UPDATE_CONTEXT
-
-    if (PTH(npfd) == PTH(nalloc)) {
-        if (PTH(nalloc) == 0) {
-            PTH(pollfds_cleanup_notifier).notify = pollfds_cleanup;
-            qemu_thread_atexit_add(&PTH(pollfds_cleanup_notifier));
-            PTH(nalloc) = 8;
+    if (npfd == nalloc) {
+        if (nalloc == 0) {
+            pollfds_cleanup_notifier.notify = pollfds_cleanup;
+            qemu_thread_atexit_add(&pollfds_cleanup_notifier);
+            nalloc = 8;
         } else {
-            g_assert(PTH(nalloc) <= INT_MAX);
-            PTH(nalloc) *= 2;
+            g_assert(nalloc <= INT_MAX);
+            nalloc *= 2;
         }
-        PTH(pollfds) = g_renew(GPollFD, PTH(pollfds), PTH(nalloc));
-        PTH(nodes) = g_renew(AioHandler *, PTH(nodes), PTH(nalloc));
+        pollfds = g_renew(GPollFD, pollfds, nalloc);
+        nodes = g_renew(AioHandler *, nodes, nalloc);
     }
-    PTH(nodes)[PTH(npfd)] = node;
-    PTH(pollfds)[PTH(npfd)] = (GPollFD) {
+    nodes[npfd] = node;
+    pollfds[npfd] = (GPollFD) {
         .fd = node->pfd.fd,
         .events = node->pfd.events,
     };
-    PTH(npfd)++;
+    npfd++;
 }
 
 static bool run_poll_handlers_once(AioContext *ctx)
@@ -627,8 +575,6 @@ static bool try_poll_mode(AioContext *ctx, bool blocking)
 
 bool aio_poll(AioContext *ctx, bool blocking)
 {
-    PTH_UPDATE_CONTEXT
-
     AioHandler *node;
     int i;
     int ret = 0;
@@ -655,7 +601,8 @@ bool aio_poll(AioContext *ctx, bool blocking)
 
     progress = try_poll_mode(ctx, blocking);
     if (!progress) {
-   assert(PTH(npfd) == 0);
+        assert(npfd == 0);
+
         /* fill pollfds */
 
         if (!aio_epoll_enabled(ctx)) {
@@ -670,19 +617,19 @@ bool aio_poll(AioContext *ctx, bool blocking)
         timeout = blocking ? aio_compute_timeout(ctx) : 0;
 
         /* wait until next event */
-         if (aio_epoll_check_poll(ctx, PTH(pollfds), PTH(npfd), timeout)) {
-
+        if (aio_epoll_check_poll(ctx, pollfds, npfd, timeout)) {
             AioHandler epoll_handler;
 
             epoll_handler.pfd.fd = ctx->epollfd;
             epoll_handler.pfd.events = G_IO_IN | G_IO_OUT | G_IO_HUP | G_IO_ERR;
-            PTH(npfd) = 0;
+            npfd = 0;
             add_pollfd(&epoll_handler);
-            ret = aio_epoll(ctx, PTH(pollfds), PTH(npfd), timeout);
+            ret = aio_epoll(ctx, pollfds, npfd, timeout);
         } else  {
-            ret = qemu_poll_ns(PTH(pollfds), PTH(npfd), timeout);
+            ret = qemu_poll_ns(pollfds, npfd, timeout);
         }
     }
+
     if (blocking) {
         atomic_sub(&ctx->notify_me, 2);
     }
@@ -732,12 +679,13 @@ bool aio_poll(AioContext *ctx, bool blocking)
 
     /* if we have any readable fds, dispatch event */
     if (ret > 0) {
-        for (i = 0; i < PTH(npfd); i++) {
-            PTH(nodes)[i]->pfd.revents = PTH(pollfds)[i].revents;
+        for (i = 0; i < npfd; i++) {
+            nodes[i]->pfd.revents = pollfds[i].revents;
         }
     }
 
-     PTH(npfd) = 0;
+    npfd = 0;
+
     progress |= aio_bh_poll(ctx);
 
     if (ret > 0) {

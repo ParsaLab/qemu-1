@@ -1,47 +1,3 @@
-//  DO-NOT-REMOVE begin-copyright-block
-// QFlex consists of several software components that are governed by various
-// licensing terms, in addition to software that was developed internally.
-// Anyone interested in using QFlex needs to fully understand and abide by the
-// licenses governing all the software components.
-// 
-// ### Software developed externally (not by the QFlex group)
-// 
-//     * [NS-3] (https://www.gnu.org/copyleft/gpl.html)
-//     * [QEMU] (http://wiki.qemu.org/License)
-//     * [SimFlex] (http://parsa.epfl.ch/simflex/)
-//     * [GNU PTH] (https://www.gnu.org/software/pth/)
-// 
-// ### Software developed internally (by the QFlex group)
-// **QFlex License**
-// 
-// QFlex
-// Copyright (c) 2020, Parallel Systems Architecture Lab, EPFL
-// All rights reserved.
-// 
-// Redistribution and use in source and binary forms, with or without modification,
-// are permitted provided that the following conditions are met:
-// 
-//     * Redistributions of source code must retain the above copyright notice,
-//       this list of conditions and the following disclaimer.
-//     * Redistributions in binary form must reproduce the above copyright notice,
-//       this list of conditions and the following disclaimer in the documentation
-//       and/or other materials provided with the distribution.
-//     * Neither the name of the Parallel Systems Architecture Laboratory, EPFL,
-//       nor the names of its contributors may be used to endorse or promote
-//       products derived from this software without specific prior written
-//       permission.
-// 
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
-// ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
-// WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-// DISCLAIMED. IN NO EVENT SHALL THE PARALLEL SYSTEMS ARCHITECTURE LABORATORY,
-// EPFL BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
-// GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
-// HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
-// LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
-// THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-//  DO-NOT-REMOVE end-copyright-block
 /*
  * QEMU coroutines
  *
@@ -72,52 +28,47 @@ enum {
 /** Free list to speed up creation */
 static QSLIST_HEAD(, Coroutine) release_pool = QSLIST_HEAD_INITIALIZER(pool);
 static unsigned int release_pool_size;
-#ifndef CONFIG_PTH
 static __thread QSLIST_HEAD(, Coroutine) alloc_pool = QSLIST_HEAD_INITIALIZER(pool);
 static __thread unsigned int alloc_pool_size;
 static __thread Notifier coroutine_pool_cleanup_notifier;
-#endif
 
 static void coroutine_pool_cleanup(Notifier *n, void *value)
 {
     Coroutine *co;
     Coroutine *tmp;
 
-    PTH_UPDATE_CONTEXT;
-
-    QSLIST_FOREACH_SAFE(co, &PTH(alloc_pool), pool_next, tmp) {
-        QSLIST_REMOVE_HEAD(&PTH(alloc_pool), pool_next);
+    QSLIST_FOREACH_SAFE(co, &alloc_pool, pool_next, tmp) {
+        QSLIST_REMOVE_HEAD(&alloc_pool, pool_next);
         qemu_coroutine_delete(co);
     }
 }
 
 Coroutine *qemu_coroutine_create(CoroutineEntry *entry, void *opaque)
 {
-    PTH_UPDATE_CONTEXT;
     Coroutine *co = NULL;
 
     if (CONFIG_COROUTINE_POOL) {
-        co = QSLIST_FIRST(&PTH(alloc_pool));
+        co = QSLIST_FIRST(&alloc_pool);
         if (!co) {
             if (release_pool_size > POOL_BATCH_SIZE) {
                 /* Slow path; a good place to register the destructor, too.  */
-                if (!PTH(coroutine_pool_cleanup_notifier).notify) {
-                    PTH(coroutine_pool_cleanup_notifier).notify = coroutine_pool_cleanup;
-                    qemu_thread_atexit_add(&PTH(coroutine_pool_cleanup_notifier));
+                if (!coroutine_pool_cleanup_notifier.notify) {
+                    coroutine_pool_cleanup_notifier.notify = coroutine_pool_cleanup;
+                    qemu_thread_atexit_add(&coroutine_pool_cleanup_notifier);
                 }
 
                 /* This is not exact; there could be a little skew between
                  * release_pool_size and the actual size of release_pool.  But
                  * it is just a heuristic, it does not need to be perfect.
                  */
-                PTH(alloc_pool_size) = atomic_xchg(&release_pool_size, 0);
-                QSLIST_MOVE_ATOMIC(&PTH(alloc_pool), &release_pool);
-                co = QSLIST_FIRST(&PTH(alloc_pool));
+                alloc_pool_size = atomic_xchg(&release_pool_size, 0);
+                QSLIST_MOVE_ATOMIC(&alloc_pool, &release_pool);
+                co = QSLIST_FIRST(&alloc_pool);
             }
         }
         if (co) {
-            QSLIST_REMOVE_HEAD(&PTH(alloc_pool), pool_next);
-            PTH(alloc_pool_size)--;
+            QSLIST_REMOVE_HEAD(&alloc_pool, pool_next);
+            alloc_pool_size--;
         }
     }
 
@@ -133,7 +84,6 @@ Coroutine *qemu_coroutine_create(CoroutineEntry *entry, void *opaque)
 
 static void coroutine_delete(Coroutine *co)
 {
-    PTH_UPDATE_CONTEXT
     co->caller = NULL;
 
     if (CONFIG_COROUTINE_POOL) {
@@ -142,9 +92,9 @@ static void coroutine_delete(Coroutine *co)
             atomic_inc(&release_pool_size);
             return;
         }
-        if (PTH(alloc_pool_size) < POOL_BATCH_SIZE) {
-            QSLIST_INSERT_HEAD(&PTH(alloc_pool), co, pool_next);
-            PTH(alloc_pool_size)++;
+        if (alloc_pool_size < POOL_BATCH_SIZE) {
+            QSLIST_INSERT_HEAD(&alloc_pool, co, pool_next);
+            alloc_pool_size++;
             return;
         }
     }

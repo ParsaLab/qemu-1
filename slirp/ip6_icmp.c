@@ -1,47 +1,3 @@
-//  DO-NOT-REMOVE begin-copyright-block
-// QFlex consists of several software components that are governed by various
-// licensing terms, in addition to software that was developed internally.
-// Anyone interested in using QFlex needs to fully understand and abide by the
-// licenses governing all the software components.
-// 
-// ### Software developed externally (not by the QFlex group)
-// 
-//     * [NS-3] (https://www.gnu.org/copyleft/gpl.html)
-//     * [QEMU] (http://wiki.qemu.org/License)
-//     * [SimFlex] (http://parsa.epfl.ch/simflex/)
-//     * [GNU PTH] (https://www.gnu.org/software/pth/)
-// 
-// ### Software developed internally (by the QFlex group)
-// **QFlex License**
-// 
-// QFlex
-// Copyright (c) 2020, Parallel Systems Architecture Lab, EPFL
-// All rights reserved.
-// 
-// Redistribution and use in source and binary forms, with or without modification,
-// are permitted provided that the following conditions are met:
-// 
-//     * Redistributions of source code must retain the above copyright notice,
-//       this list of conditions and the following disclaimer.
-//     * Redistributions in binary form must reproduce the above copyright notice,
-//       this list of conditions and the following disclaimer in the documentation
-//       and/or other materials provided with the distribution.
-//     * Neither the name of the Parallel Systems Architecture Laboratory, EPFL,
-//       nor the names of its contributors may be used to endorse or promote
-//       products derived from this software without specific prior written
-//       permission.
-// 
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
-// ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
-// WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-// DISCLAIMED. IN NO EVENT SHALL THE PARALLEL SYSTEMS ARCHITECTURE LABORATORY,
-// EPFL BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
-// GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
-// HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
-// LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
-// THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-//  DO-NOT-REMOVE end-copyright-block
 /*
  * Copyright (c) 2013
  * Guillaume Subiron, Yann Bordenave, Serigne Modou Wagne.
@@ -116,13 +72,12 @@ void icmp6_send_error(struct mbuf *m, uint8_t type, uint8_t code)
     Slirp *slirp = m->slirp;
     struct mbuf *t;
     struct ip6 *ip = mtod(m, struct ip6 *);
-    struct in6_addr ip_src = ip->ip_src;
 
     DEBUG_CALL("icmp6_send_error");
     DEBUG_ARGS((dfd, " type = %d, code = %d\n", type, code));
 
-    if (IN6_IS_ADDR_MULTICAST(&ip_src) ||
-            IN6_IS_ADDR_UNSPECIFIED(&ip_src)) {
+    if (IN6_IS_ADDR_MULTICAST(&ip->ip_src) ||
+            IN6_IS_ADDR_UNSPECIFIED(&ip->ip_src)) {
         /* TODO icmp error? */
         return;
     }
@@ -316,9 +271,8 @@ static void ndp_send_na(Slirp *slirp, struct ip6 *ip, struct icmp6 *icmp)
     /* Build IPv6 packet */
     struct mbuf *t = m_get(slirp);
     struct ip6 *rip = mtod(t, struct ip6 *);
-    struct in6_addr ip_src = ip->ip_src;
     rip->ip_src = icmp->icmp6_nns.target;
-    if (IN6_IS_ADDR_UNSPECIFIED(&ip_src)) {
+    if (IN6_IS_ADDR_UNSPECIFIED(&ip->ip_src)) {
         rip->ip_dst = (struct in6_addr)ALLNODES_MULTICAST;
     } else {
         rip->ip_dst = ip->ip_src;
@@ -365,10 +319,6 @@ static void ndp_send_na(Slirp *slirp, struct ip6 *ip, struct icmp6 *icmp)
 static void ndp_input(struct mbuf *m, Slirp *slirp, struct ip6 *ip,
         struct icmp6 *icmp)
 {
-    struct in6_addr ip_src;
-    struct in6_addr ip_dst;
-    struct in6_addr icmp6_nns_target;
-
     m->m_len += ETH_HLEN;
     m->m_data -= ETH_HLEN;
     struct ethhdr *eth = mtod(m, struct ethhdr *);
@@ -396,18 +346,15 @@ static void ndp_input(struct mbuf *m, Slirp *slirp, struct ip6 *ip,
 
     case ICMP6_NDP_NS:
         DEBUG_CALL(" type = Neighbor Solicitation");
-        ip_src = ip->ip_src;
-        ip_dst = ip->ip_dst;
         if (ip->ip_hl == 255
                 && icmp->icmp6_code == 0
                 && !IN6_IS_ADDR_MULTICAST(&icmp->icmp6_nns.target)
                 && ntohs(ip->ip_pl) >= ICMP6_NDP_NS_MINLEN
-                && (!IN6_IS_ADDR_UNSPECIFIED(&ip_src)
-                    || in6_solicitednode_multicast(&ip_dst))) {
-            icmp6_nns_target = icmp->icmp6_nns.target;
-            if (in6_equal_host(&icmp6_nns_target)) {
+                && (!IN6_IS_ADDR_UNSPECIFIED(&ip->ip_src)
+                    || in6_solicitednode_multicast(&ip->ip_dst))) {
+            if (in6_equal_host(&icmp->icmp6_nns.target)) {
                 /* Gratuitous NDP */
-                ndp_table_add(slirp, ip_src, eth->h_source);
+                ndp_table_add(slirp, ip->ip_src, eth->h_source);
                 ndp_send_na(slirp, ip, icmp);
             }
         }
@@ -442,7 +389,6 @@ void icmp6_input(struct mbuf *m)
     struct ip6 *ip = mtod(m, struct ip6 *);
     Slirp *slirp = m->slirp;
     int hlen = sizeof(struct ip6);
-    struct in6_addr ip_dst;
 
     DEBUG_CALL("icmp6_input");
     DEBUG_ARG("m = %lx", (long) m);
@@ -465,8 +411,7 @@ void icmp6_input(struct mbuf *m)
     DEBUG_ARG("icmp6_type = %d", icmp->icmp6_type);
     switch (icmp->icmp6_type) {
     case ICMP6_ECHO_REQUEST:
-        ip_dst = ip->ip_dst;
-        if (in6_equal_host(&ip_dst)) {
+        if (in6_equal_host(&ip->ip_dst)) {
             icmp6_send_echoreply(m, slirp, ip, icmp);
         } else {
             /* TODO */

@@ -1,47 +1,3 @@
-//  DO-NOT-REMOVE begin-copyright-block
-// QFlex consists of several software components that are governed by various
-// licensing terms, in addition to software that was developed internally.
-// Anyone interested in using QFlex needs to fully understand and abide by the
-// licenses governing all the software components.
-// 
-// ### Software developed externally (not by the QFlex group)
-// 
-//     * [NS-3] (https://www.gnu.org/copyleft/gpl.html)
-//     * [QEMU] (http://wiki.qemu.org/License)
-//     * [SimFlex] (http://parsa.epfl.ch/simflex/)
-//     * [GNU PTH] (https://www.gnu.org/software/pth/)
-// 
-// ### Software developed internally (by the QFlex group)
-// **QFlex License**
-// 
-// QFlex
-// Copyright (c) 2020, Parallel Systems Architecture Lab, EPFL
-// All rights reserved.
-// 
-// Redistribution and use in source and binary forms, with or without modification,
-// are permitted provided that the following conditions are met:
-// 
-//     * Redistributions of source code must retain the above copyright notice,
-//       this list of conditions and the following disclaimer.
-//     * Redistributions in binary form must reproduce the above copyright notice,
-//       this list of conditions and the following disclaimer in the documentation
-//       and/or other materials provided with the distribution.
-//     * Neither the name of the Parallel Systems Architecture Laboratory, EPFL,
-//       nor the names of its contributors may be used to endorse or promote
-//       products derived from this software without specific prior written
-//       permission.
-// 
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
-// ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
-// WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-// DISCLAIMED. IN NO EVENT SHALL THE PARALLEL SYSTEMS ARCHITECTURE LABORATORY,
-// EPFL BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
-// GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
-// HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
-// LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
-// THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-//  DO-NOT-REMOVE end-copyright-block
 /*
  * QEMU System Emulator
  *
@@ -95,429 +51,6 @@
 #include "hw/nmi.h"
 #include "sysemu/replay.h"
 #include "hw/boards.h"
-
-#if defined(CONFIG_FLEXUS)
-#include "qflex/qflex.h"
-#endif /* CONFIG_FLEXUS */
-
-#ifdef CONFIG_FLEXUS
-#include "../libqflex/flexus_proxy.h"
-#include "../libqflex/api.h"
-
-typedef enum simulation_mode {
-    NONE,
-    TRACE,
-    TIMING,
-    LASTMODE,
-}simulation_mode;
-static const char* simulation_mode_strings[] = {
-    "NONE",
-    "TRACE",
-    "TIMING",
-    "LASTMODE"
-};
-typedef struct flexus_state_t {
-    simulation_mode mode;
-    uint64_t length;
-    const char * simulator;
-    const char * config_file; // user_postload
-    simulator_obj_t* simulator_obj;
-    const char* load_dir;
-    const char* debug_mode;
-
-}flexus_state_t;
-
-static flexus_state_t flexus_state;
-
-int flexus_in_timing(void){ return flexus_state.mode == TIMING; }
-int flexus_in_trace(void) { return flexus_state.mode == TRACE; }
-bool flexus_in_simulation(void){ return flexus_in_timing() | flexus_in_trace(); }
-bool hasSimulator(void){ return flexus_state.simulator_obj != NULL; }
-
-static void flexus_setUserPostLoadFile (const char *file_name){
-    simulator_config(file_name);
-}
-const char* flexus_simulation_status(void){
-    return simulation_mode_strings[flexus_state.mode];
-}
-
-void quitFlexus(void){
-    if (flexus_in_simulation()) {
-        if(hasSimulator())
-            simulator_deinit();
-        else {
-            fprintf(stderr, "no simulator object found!");
-            exit(1);
-        }
-    }
-}
-void prepareFlexus(void){
-    if (flexus_in_simulation()) {
-        if(hasSimulator()){
-            if (flexus_state.config_file){
-                flexus_setUserPostLoadFile(flexus_state.config_file);
-            }
-            simulator_prepare();
-            if (flexus_state.load_dir) {
-                flexus_doLoad(flexus_state.load_dir, NULL);
-            }
-            if (flexus_state.debug_mode) {
-                flexus_setDebug(flexus_state.debug_mode, NULL);
-            }
-        } else {
-            fprintf(stderr, "no simulator object found!");
-            exit(1);
-        }
-    }
-}
-void initFlexus(void){
-    if (flexus_in_simulation()) {
-        if( hasSimulator()) {
-            QFLEX_API_Interface_Hooks_t* hooks = (QFLEX_API_Interface_Hooks_t*)malloc(sizeof(QFLEX_API_Interface_Hooks_t));
-            QFLEX_API_get_Interface_Hooks (hooks);
-            simulator_init(hooks);
-            free(hooks);
-        } else {
-            fprintf(stderr, "no simulator object found!");
-            exit(1);
-        }
-    }
-}
-void startFlexus(void){
-    if (flexus_in_timing()) {
-        if(hasSimulator()) {
-            simulator_start();
-        } else {
-            fprintf(stderr, "no simulator object found!");
-            exit(1);
-        }
-    }
-}
-void flexus_qmp(qmp_flexus_cmd_t cmd, const char* args, Error **errp){
-    if (flexus_in_simulation()) {
-        if(hasSimulator()){
-            simulator_qmp(cmd, args);
-
-        } else {
-            fprintf(stderr, "no simulator object found!");
-            exit(1);
-        }
-    } else {
-        error_setg(errp, "flexus is not running");
-    }
-}
-
-void flexus_addDebugCfg(const char *filename, Error **errp){
-    flexus_qmp(QMP_FLEXUS_ADDDEBUGCFG, filename, errp);
-}
-void flexus_setBreakCPU(const char * value, Error **errp){
-    flexus_qmp(QMP_FLEXUS_SETBREAKCPU, value, errp);
-}
-void flexus_backupStats(const char *filename, Error **errp){
-    flexus_qmp(QMP_FLEXUS_BACKUPSTATS, filename, errp);
-}
-void flexus_disableCategory(const char *component, Error **errp){
-    flexus_qmp(QMP_FLEXUS_DISABLECATEGORY, component, errp);
-}
-void flexus_disableComponent(const char *component, const char *index, Error **errp){
-    char* args = malloc((strlen(component)+strlen(index)*sizeof(char)));
-    sprintf(args, "%s:%s",component, index);
-    flexus_qmp(QMP_FLEXUS_DISABLECOMPONENT, args, errp);
-}
-void flexus_enableCategory(const char *component, Error **errp){
-    flexus_qmp(QMP_FLEXUS_ENABLECATEGORY, component, errp);
-}
-void flexus_enableComponent(const char *component, const char *index, Error **errp){
-    char* args = malloc((strlen(component)+strlen(index)*sizeof(char)));
-    sprintf(args, "%s:%s",component, index);
-    flexus_qmp(QMP_FLEXUS_ENABLECOMPONENT, args, errp);
-}
-void flexus_enterFastMode(Error **errp){
-    flexus_qmp(QMP_FLEXUS_ENTERFASTMODE, NULL, errp);
-}
-void flexus_leaveFastMode(Error **errp){
-    flexus_qmp(QMP_FLEXUS_LEAVEFASTMODE, NULL, errp);
-}
-void flexus_listCategories(Error **errp){
-    flexus_qmp(QMP_FLEXUS_LISTCATEGORIES, NULL, errp);
-}
-void flexus_listComponents(Error **errp){
-    flexus_qmp(QMP_FLEXUS_LISTCOMPONENTS, NULL, errp);
-}
-void flexus_listMeasurements(Error **errp){
-    flexus_qmp(QMP_FLEXUS_LISTMEASUREMENTS, NULL, errp);
-}
-void flexus_log(const char *name, const char *interval, const char *regex, Error **errp){
-    char* args = malloc((strlen(name)+strlen(interval)+strlen(regex))*sizeof(char));
-    sprintf(args, "%s:%s:%s",name, interval,regex);
-    flexus_qmp(QMP_FLEXUS_LOG, args, errp);
-}
-void flexus_parseConfiguration(const char *filename, Error **errp){
-    flexus_qmp(QMP_FLEXUS_PARSECONFIGURATION, filename, errp);
-}
-void flexus_printConfiguration(Error **errp){
-    flexus_qmp(QMP_FLEXUS_PRINTCONFIGURATION, NULL, errp);
-}
-void flexus_printCycleCount(Error **errp){
-    flexus_qmp(QMP_FLEXUS_PRINTCYCLECOUNT, NULL, errp);
-}
-void flexus_printDebugConfiguration(Error **errp){
-    flexus_qmp(QMP_FLEXUS_PRINTDEBUGCONFIGURATION, NULL, errp);
-}
-void flexus_printMMU(const char* cpu, Error **errp){
-    flexus_qmp(QMP_FLEXUS_PRINTMMU, cpu, errp);
-}
-void flexus_printMeasurement(const char *measurement, Error **errp){
-    flexus_qmp(QMP_FLEXUS_PRINTMEASUREMENT, measurement, errp);
-}
-void flexus_printProfile(Error **errp){
-    flexus_qmp(QMP_FLEXUS_PRINTPROFILE, NULL, errp);
-}
-void flexus_quiesce(Error **errp){
-    flexus_qmp(QMP_FLEXUS_QUIESCE, NULL, errp);
-}
-void flexus_reloadDebugCfg(Error **errp){
-    flexus_qmp(QMP_FLEXUS_RELOADDEBUGCFG, NULL, errp);
-}
-void flexus_resetProfile(Error **errp){
-    flexus_qmp(QMP_FLEXUS_RESETPROFILE, NULL, errp);
-}
-void flexus_saveStats(const char *filename, Error **errp){
-    flexus_qmp(QMP_FLEXUS_SAVESTATS, filename, errp);
-}
-void flexus_setBreakInsn(const char *value, Error **errp){
-    flexus_qmp(QMP_FLEXUS_SETBREAKCPU, value, errp);
-}
-void flexus_setConfiguration(const char *name, const char *value, Error **errp){
-    char* args = malloc((strlen(name)+strlen(value))*sizeof(char));
-    sprintf(args, "%s:%s",name, value);
-    flexus_qmp(QMP_FLEXUS_SETCONFIGURATION, args, errp);
-}
-void flexus_setDebug(const char *debugseverity, Error **errp){
-    flexus_qmp(QMP_FLEXUS_SETDEBUG, debugseverity, errp);
-}
-void flexus_setProfileInterval(const char *value, Error **errp){
-    flexus_qmp(QMP_FLEXUS_SETPROFILEINTERVAL, value, errp);
-}
-void flexus_setRegionInterval(const char *value, Error **errp){
-    flexus_qmp(QMP_FLEXUS_SETREGIONINTERVAL, value, errp);
-}
-void flexus_setStatInterval(const char *value, Error **errp){
-    flexus_qmp(QMP_FLEXUS_SETSTATINTERVAL, value, errp);
-}
-void flexus_setStopCycle(const char *value, Error **errp){
-    flexus_qmp(QMP_FLEXUS_SETSTOPCYCLE, value, errp);
-}
-void flexus_setTimestampInterval(const char *value, Error **errp){
-    flexus_qmp(QMP_FLEXUS_SETTIMESTAMPINTERVAL, value, errp);
-}
-void flexus_terminateSimulation(Error **errp){
-    flexus_qmp(QMP_FLEXUS_TERMINATESIMULATION, NULL, errp);
-}
-void flexus_writeConfiguration(const char *filename, Error **errp){
-    flexus_qmp(QMP_FLEXUS_WRITECONFIGURATION, filename, errp);
-}
-void flexus_writeDebugConfiguration(Error **errp){
-    flexus_qmp(QMP_FLEXUS_WRITEDEBUGCONFIGURATION, NULL, errp);
-}
-void flexus_writeMeasurement(const char *measurement, const char *filename, Error **errp){
-    char* args = malloc((strlen(measurement)+strlen(filename))*sizeof(char));
-    sprintf(args, "%s:%s",measurement, filename);
-    flexus_qmp(QMP_FLEXUS_WRITEMEASUREMENT, args, errp);
-}
-void flexus_writeProfile(const char *filename, Error **errp){
-    flexus_qmp(QMP_FLEXUS_WRITEPROFILE, filename, errp);
-}
-void flexus_doSave(const char *dir_name, Error **errp){
-    flexus_qmp(QMP_FLEXUS_DOSAVE, dir_name, errp);
-
-}
-void flexus_doLoad(const char *dir_name, Error **errp){
-    int file_count = 0;
-    DIR * dirp;
-    struct dirent * entry;
-
-    dirp = opendir(dir_name);
-    while ((entry = readdir(dirp)) != NULL) {
-        if (entry->d_type == DT_REG) { /* If the entry is a regular file */
-             file_count++;
-        }
-    }
-    closedir(dirp);
-
-    if (file_count > 2) // might not be best
-        flexus_qmp(QMP_FLEXUS_DOLOAD, dir_name, errp);
-}
-
-#endif /* CONFIG_FLEXUS */
-
-#ifdef CONFIG_QUANTUM
-typedef struct {
-    uint64_t quantum_value, quantum_record_value, quantum_node_value,quantum_step_value;
-    char* quantum_file_value;
-    uint64_t total_num_instructions, last_num_instruction;
-    bool quantum_pause;
-} quantum_state_t;
-
-static quantum_state_t quantum_state;
-
-bool query_quantum_pause_state(void) { return quantum_state.quantum_pause; }
-void quantum_pause(void)    { quantum_state.quantum_pause = true; }
-void quantum_unpause(void)  { quantum_state.quantum_pause = false; qmp_cont(NULL); }
-uint64_t* increment_total_num_instr(void) {
-    quantum_state.total_num_instructions++;
-    return &(quantum_state.total_num_instructions);
-}
-uint64_t query_total_num_instr(void)        { return quantum_state.total_num_instructions; }
-uint64_t query_quantum_core_value(void)     { return quantum_state.quantum_value; }
-uint64_t query_quantum_record_value(void)   { return quantum_state.quantum_record_value; }
-uint64_t query_quantum_step_value(void)     { return quantum_state.quantum_step_value; }
-uint64_t query_quantum_node_value(void)     { return quantum_state.quantum_node_value; }
-const char* query_quantum_file_value(void)  { return quantum_state.quantum_file_value; }
-void set_total_num_instr(uint64_t val)      { quantum_state.total_num_instructions = val; }
-void set_quantum_value(uint64_t val)        { quantum_state.quantum_value = val; }
-void set_quantum_record_value(uint64_t val) { quantum_state.quantum_record_value = val; }
-void set_quantum_node_value(uint64_t val)   { quantum_state.quantum_node_value = val; }
-#endif /* CONFIG_QUANTUM */
-
-#ifdef CONFIG_EXTSNAP
-#include <dirent.h>
-
-typedef struct phases_state_t {
-    uint64_t val;
-    int id;
-    QLIST_ENTRY(phases_state_t) next;
-}phases_state_t;
-typedef struct ckpt_state_t {
-    uint64_t ckpt_interval;
-    uint64_t ckpt_end;
-    char* base_snap_name;
-    int ckpt_id;
-}ckpt_state_t;
-
-static ckpt_state_t ckpt_state;
-static bool using_phases;
-static bool using_ckpt;
-static char* phases_prefix;
-static char* snap_name;
-static QLIST_HEAD(, phases_state_t) phases_head = QLIST_HEAD_INITIALIZER(phases_head);
-static bool cont_requested, save_requested, quit_requested;
-
-static const char* get_phases_prefix(void) { return phases_prefix; }
-static const char* get_base_ckpt_name(void) { return ckpt_state.base_snap_name; }
-uint64_t get_ckpt_interval(void){ return ckpt_state.ckpt_interval; }
-uint64_t get_ckpt_end(void)     { return ckpt_state.ckpt_end; }
-const char* get_ckpt_name(void) { return snap_name; }
-bool phase_is_valid(void)   { return (QLIST_EMPTY(&phases_head) ? false : true); }
-bool is_phases_enabled(void){ return using_phases; }
-bool is_ckpt_enabled(void)  { return using_ckpt; }
-void toggle_phases_creation(void) { using_phases = !using_phases; }
-void toggle_ckpt_creation(void)   { using_ckpt   = !using_ckpt; }
-void toggle_save_request(void)  { save_requested = !save_requested; }
-void toggle_cont_request(void)  { cont_requested = !cont_requested; }
-void request_cont(void) { cont_requested = true; }
-void request_quit(void) { quit_requested = true; }
-bool save_request_pending(void) { return save_requested; }
-bool cont_request_pending(void) { return cont_requested; }
-bool quit_request_pending(void) { return quit_requested; }
-
-static int get_phase_id(void)
-{
-    if (QLIST_EMPTY(&phases_head)) assert(false);
-    phases_state_t *p = QLIST_FIRST(&phases_head);
-    return p->id;
-}
-uint64_t get_phase_value(void){
-    if (QLIST_EMPTY(&phases_head)) assert(false);
-    phases_state_t *p = QLIST_FIRST(&phases_head);
-    return p->val;
-}
-void set_base_ckpt_name(const char* str){
-    if (strcmp(str,"")==0) {
-        ckpt_state.base_snap_name = (char*)malloc(6*sizeof(char));
-        for (int i =0; i<6;++i) {
-            char randomletter = 'A' + (random() % 26);
-            ckpt_state.base_snap_name[i] = randomletter;
-        }
-    } else {
-        ckpt_state.base_snap_name = strdup(str);
-    }
-}
-static inline void request_save(const char*str) {
-    snap_name = strdup(str);
-    save_requested = true;
-}
-void save_ckpt(void) {
-    char* name = (char*)malloc(strlen(get_base_ckpt_name()) + 10*sizeof(char));
-    sprintf(name, "%s_ckpt_%03d", get_base_ckpt_name(), ckpt_state.ckpt_id++);
-    request_save(name);
-}
-void save_phase(void) {
-    char* name = (char*)malloc(strlen(get_phases_prefix()) + 5*sizeof(char));
-    sprintf(name, "%s_%03d", get_phases_prefix(), get_phase_id());
-    request_save(name);
-}
-void pop_phase(void) {
-    if (QLIST_EMPTY(&phases_head)) assert(false);
-    phases_state_t *p = QLIST_FIRST(&phases_head);
-    QLIST_REMOVE(p, next);
-
-}
-void configure_phases(QemuOpts *opts, Error **errp) {
-    const char* step_opt, *name_opt;
-    step_opt = qemu_opt_get(opts, "steps");
-    name_opt = qemu_opt_get(opts, "name");
-
-    int id = 0;
-    if (!step_opt) {
-        error_setg(errp, "no distances for phases defined");
-    }
-    if (!name_opt) {
-        fprintf(stderr, "no naming prefix  given for phases option. will use prefix phase_00X");
-        phases_prefix = strdup("phase");
-    } else {
-        phases_prefix = strdup(name_opt);
-    }
-
-    phases_state_t * head = calloc(1, sizeof(phases_state_t));
-
-    char* token = strtok((char*) step_opt, ":");
-    processForOpts(&head->val, token, errp);
-    head->id = id++;
-    QLIST_INSERT_HEAD(&phases_head, head, next);
-
-    while (token) {
-        token = strtok(NULL, ":");
-
-        if (token) {
-            phases_state_t* phase = calloc(1, sizeof(phases_state_t));
-            processForOpts(&phase->val, token, errp);
-            phase->id= id++;
-            QLIST_INSERT_AFTER(head, phase, next);
-            head = phase;
-        }
-    }
-}
-void configure_ckpt(QemuOpts *opts, Error **errp) {
-    const char* every_opt, *end_opt;
-    every_opt = qemu_opt_get(opts, "every");
-    end_opt = qemu_opt_get(opts, "end");
-
-    if (!every_opt) {
-        error_setg(errp, "no interval given for ckpt option. cant continue");
-    }
-    if (!end_opt) {
-        error_setg(errp, "no end given for ckpt option. cant continue");
-    }
-
-    processForOpts(&ckpt_state.ckpt_interval, every_opt, errp);
-    processForOpts(&ckpt_state.ckpt_end, end_opt, errp);
-
-    if (ckpt_state.ckpt_end < ckpt_state.ckpt_interval) {
-        error_setg(errp, "ckpt end cant be smaller than ckpt interval");
-    }
-}
-#endif /* CONFIG_EXTSNAP */
 
 #ifdef CONFIG_LINUX
 
@@ -613,9 +146,6 @@ typedef struct TimersState {
     int64_t qemu_icount_bias;
     /* Only written by TCG thread */
     int64_t qemu_icount;
-
-    /* Msutherl: State variable indicating icount subsection was received */
-    bool icount_subsec_set;
 } TimersState;
 
 static TimersState timers_state;
@@ -724,8 +254,7 @@ void cpu_update_icount(CPUState *cpu)
 
 int64_t cpu_get_icount_raw(void)
 {
-    PTH_UPDATE_CONTEXT
-    CPUState *cpu = PTH(current_cpu);
+    CPUState *cpu = current_cpu;
 
     if (cpu && cpu->running) {
         if (!cpu->can_do_io) {
@@ -1102,26 +631,6 @@ static bool icount_state_needed(void *opaque)
     return use_icount;
 }
 
-static int icount_timers_post_load(void *opaque, int version_id) {
-    TimersState *s = (TimersState*) opaque;
-    s->icount_subsec_set = true;
-    return 0;
-}
-
-static int timers_global_pre_load(void *opaque) {
-    TimersState *s = (TimersState*) opaque;
-    s->icount_subsec_set = false;
-    return 0;
-}
-
-static int timers_global_post_load(void *opaque,int version_id) {
-    TimersState *s = (TimersState*) opaque;
-    if (use_icount && !s->icount_subsec_set) {
-        timers_state.qemu_icount_bias = cpu_get_clock();
-    }
-    return 0;
-}
-
 /*
  * This is a subsection for icount migration.
  */
@@ -1130,7 +639,6 @@ static const VMStateDescription icount_vmstate_timers = {
     .version_id = 1,
     .minimum_version_id = 1,
     .needed = icount_state_needed,
-    .post_load = icount_timers_post_load,
     .fields = (VMStateField[]) {
         VMSTATE_INT64(qemu_icount_bias, TimersState),
         VMSTATE_INT64(qemu_icount, TimersState),
@@ -1142,8 +650,6 @@ static const VMStateDescription vmstate_timers = {
     .name = "timer",
     .version_id = 2,
     .minimum_version_id = 1,
-    .pre_load = timers_global_pre_load,
-    .post_load = timers_global_post_load,
     .fields = (VMStateField[]) {
         VMSTATE_INT64(cpu_ticks_offset, TimersState),
         VMSTATE_INT64(dummy, TimersState),
@@ -1231,182 +737,6 @@ void cpu_ticks_init(void)
     throttle_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL_RT,
                                            cpu_throttle_timer_tick, NULL);
 }
-
-#if defined(CONFIG_QUANTUM) || defined(CONFIG_FLEXUS) || defined(CONFIG_EXTSNAP)
-#define KIL 1E3
-#define MIL 1E6
-#define BIL 1E9
-void processLetterforExponent(uint64_t *val, char c, Error **errp)
-{
-    switch(c) {
-        case 'K': case 'k' :
-        *val *= KIL;
-        break;
-        case 'M':case 'm':
-        *val  *= MIL;
-        break;
-        case 'B':case 'b':
-        *val  *= BIL;
-        break;
-        default:
-        error_setg(errp, "the suffix you used is not valid: valid suffixes are K,k,M,m,B,b");
-        exit(1);
-        break;
-    }
-}
-void processForOpts(uint64_t *val, const char* qopt, Error **errp)
-{
-    size_t s = strlen(qopt);
-    char c = qopt[s-1];
-
-    if (isalpha(c)) {
-        char* temp= strndup(qopt,  strlen(qopt)-1);
-        *val = atoi(temp);
-        free(temp);
-        if (*val <= 0){
-            *val = 0;
-            return;
-        }
-
-        processLetterforExponent(&(*val), c, errp);
-    } else {
-        *val = atoi(qopt);
-    }
-}
-#endif
-
-#ifdef CONFIG_QUANTUM
-void configure_quantum(QemuOpts *opts, Error **errp)
-{
-    const char* qopt, *qopt_record, *qopt_node, *qopt_step, *qopt_file;
-    qopt = qemu_opt_get(opts, "core");
-    qopt_record = qemu_opt_get(opts, "record");
-    qopt_step = qemu_opt_get(opts, "step");
-    qopt_file = qemu_opt_get(opts, "file");
-    qopt_node = qemu_opt_get(opts, "node");
-
-    if (!qopt_file && qopt_record) {
-        fprintf(stderr, "no file defined for quantum record output - using current directory and will save to quantum_file.dat");
-        quantum_state.quantum_file_value = strdup("quantum_file.dat"); // defaulting to current directory
-    } else if (qopt_file && !qopt_record) {
-        error_setg(errp, "quantum step can only be used with record");
-    } else if (qopt_file && qopt_record) {
-        quantum_state.quantum_file_value = strdup(qopt_file);
-    }
-
-    if (!qopt_step && qopt_record) {
-        fprintf(stderr, "no quantum step defined for quantum record. - will use a default value of 100M");
-        quantum_state.quantum_step_value = 1e8; // 100 MIPS by default
-    } else if (qopt_step && !qopt_record) {
-        error_setg(errp, "quantum step can only be used with record");
-    } else if (qopt_step && qopt_record) {
-        processForOpts(&quantum_state.quantum_step_value, qopt_step, errp);
-    }
-
-    if (!qopt && !qopt_record && !qopt_node) {
-        error_setg(errp, "quantum option is not valid");
-        exit(1);
-    }
-
-    if (qopt) {
-        if (qemu_tcg_mttcg_enabled()) {
-            error_setg(errp, "Quantum is not supported with mttcg. Use -accel tcg,thread=single or -icount.\n");
-            exit(1);
-        } else {
-            processForOpts(&quantum_state.quantum_value, qopt, errp);
-            if (!qemu_loglevel_mask(CPU_LOG_TB_NOCHAIN)) {
-                printf("quantum value is not guaranteed to work with chaining TBs. use '-d nochain'\n");
-            }
-        }
-    }
-
-    if (qopt_record) {
-        processForOpts(&quantum_state.quantum_record_value, qopt_record, errp);
-    }
-    if (qopt_node) {
-        processForOpts(&quantum_state.quantum_node_value, qopt_node, errp);
-        if (quantum_state.quantum_node_value > 0) {
-           raise(SIGSTOP);
-        }
-    }
-}
-#endif /* CONFIG_QUANTUM */
-
-#ifdef CONFIG_FLEXUS
-void configure_flexus(QemuOpts *opts, Error **errp)
-{
-    const char* mode_opt, *length_opt, *simulator_opt, *config_opt,*debug_opt;
-    mode_opt = qemu_opt_get(opts, "mode");
-    length_opt = qemu_opt_get(opts, "length");
-    simulator_opt = qemu_opt_get(opts, "simulator");
-    config_opt = qemu_opt_get(opts, "config");
-    debug_opt = qemu_opt_get(opts, "debug");
-
-    if (!mode_opt) {
-        error_setg(errp, "simulator mode needs to be defined");
-    }
-    char* temp = strdup(mode_opt);
-    /* Set trace or timing */
-    flexus_state.mode = strcmp(temp, "timing")==0 ? TIMING : TRACE;
-
-    /* Parse MANDATORY simulation length, simulator, and config options */
-    if (!length_opt || !simulator_opt || !config_opt) {
-        error_setg(errp, "ERROR: Not all flexus options need to be defined. Mandatory: length=,simulator=,config=");
-    }
-    processForOpts(&flexus_state.length, length_opt, errp);
-    if (flexus_state.length == 0) {
-        error_setg(errp, "Refusing to run with ZERO simulation length.");
-    }
-    QEMU_setSimulationTime(flexus_state.length);
-    QEMU_initialize((flexus_state.mode == TIMING) ? true : false);
-    free(temp);
-
-    flexus_state.simulator = strdup(simulator_opt);
-    if( access( flexus_state.simulator, F_OK ) != -1 ) {
-        flexus_state.simulator_obj = simulator_load( flexus_state.simulator );
-        if (flexus_state.simulator_obj){
-            fprintf(stderr, "<%s:%i> Flexus Simulator set!.\n", basename(__FILE__), __LINE__);
-        } else {
-            error_setg(errp, "simulator could not be set.!.\n");
-        }
-    } else {
-        error_setg(errp, "simulator path contains no simulator!.\n");
-    }
-
-    flexus_state.config_file = strdup(config_opt);
-    if(! (access( flexus_state.config_file, F_OK ) != -1) ) {
-        error_setg(errp, "no config file (user_postload) at this path %s\n", config_opt);
-    }
-
-    if (debug_opt) {
-        char* tmp = strdup(debug_opt);
-        for (int i = 0; i < strlen(debug_opt); i++){
-            tmp[i] = tolower(debug_opt[i]);
-        }
-
-        flexus_state.debug_mode = strdup(tmp);
-
-        free(tmp);
-    }
-
-    initFlexus();
-
-    // trigger the periodic event
-    QEMU_execute_callbacks(-1, 0, 0);
-}
-void set_flexus_load_dir(const char* dir_name) {
-    DIR* dir = opendir(dir_name);
-    if (dir) {
-        /* Directory exists. */
-        flexus_state.load_dir = strdup(dir_name);
-        closedir(dir);
-    } else if (ENOENT == errno) {
-        /* Directory does not exist. */
-    } else {
-        /* opendir() failed for some other reason. */
-    }
-}
-#endif /* CONFIG_FLEXUS */
 
 void configure_icount(QemuOpts *opts, Error **errp)
 {
@@ -1649,11 +979,7 @@ static void sigbus_reraise(void)
         raise(SIGBUS);
         sigemptyset(&set);
         sigaddset(&set, SIGBUS);
-#ifndef CONFIG_PTH
         pthread_sigmask(SIG_UNBLOCK, &set, NULL);
-#else
-        pthpthread_sigmask(SIG_UNBLOCK, &set, NULL);
-#endif
     }
     perror("Failed to re-raise SIGBUS!\n");
     abort();
@@ -1661,13 +987,13 @@ static void sigbus_reraise(void)
 
 static void sigbus_handler(int n, siginfo_t *siginfo, void *ctx)
 {
-    PTH_UPDATE_CONTEXT
     if (siginfo->si_code != BUS_MCEERR_AO && siginfo->si_code != BUS_MCEERR_AR) {
         sigbus_reraise();
     }
-    if (PTH(current_cpu)) {
+
+    if (current_cpu) {
         /* Called asynchronously in VCPU thread.  */
-        if (kvm_on_sigbus_vcpu(PTH(current_cpu), siginfo->si_code, siginfo->si_addr)) {
+        if (kvm_on_sigbus_vcpu(current_cpu, siginfo->si_code, siginfo->si_addr)) {
             sigbus_reraise();
         }
     } else {
@@ -1774,7 +1100,6 @@ static void qemu_kvm_wait_io_event(CPUState *cpu)
 
 static void *qemu_kvm_cpu_thread_fn(void *arg)
 {
-    PTH_UPDATE_CONTEXT
     CPUState *cpu = arg;
     int r;
 
@@ -1784,7 +1109,8 @@ static void *qemu_kvm_cpu_thread_fn(void *arg)
     qemu_thread_get_self(cpu->thread);
     cpu->thread_id = qemu_get_thread_id();
     cpu->can_do_io = 1;
-    PTH(current_cpu) = cpu;
+    current_cpu = cpu;
+
     r = kvm_init_vcpu(cpu);
     if (r < 0) {
         fprintf(stderr, "kvm_init_vcpu failed: %s\n", strerror(-r));
@@ -1820,7 +1146,6 @@ static void *qemu_dummy_cpu_thread_fn(void *arg)
     fprintf(stderr, "qtest is not supported under Windows\n");
     exit(1);
 #else
-    PTH_UPDATE_CONTEXT
     CPUState *cpu = arg;
     sigset_t waitset;
     int r;
@@ -1831,7 +1156,8 @@ static void *qemu_dummy_cpu_thread_fn(void *arg)
     qemu_thread_get_self(cpu->thread);
     cpu->thread_id = qemu_get_thread_id();
     cpu->can_do_io = 1;
-    PTH(current_cpu) = cpu;
+    current_cpu = cpu;
+
     sigemptyset(&waitset);
     sigaddset(&waitset, SIG_IPI);
 
@@ -1872,17 +1198,8 @@ static int64_t tcg_get_icount_limit(void)
         if ((deadline < 0) || (deadline > INT32_MAX)) {
             deadline = INT32_MAX;
         }
-#ifdef CONFIG_QUANTUM
-        int64_t quantum_val = query_quantum_core_value();
-        if (quantum_val > 0) { // assume quantum is enabled
-            int64_t icount_scaled = qemu_icount_round(deadline);
-            return (icount_scaled < quantum_val) ? icount_scaled : quantum_val;
-        } else {
-            return qemu_icount_round(deadline);
-        }
-#else
+
         return qemu_icount_round(deadline);
-#endif
     } else {
         return replay_get_instructions();
     }
@@ -1937,11 +1254,15 @@ static void process_icount_data(CPUState *cpu)
     }
 }
 
+
 static int tcg_cpu_exec(CPUState *cpu)
 {
     int ret;
 #ifdef CONFIG_PROFILER
     int64_t ti;
+#endif
+
+#ifdef CONFIG_PROFILER
     ti = profile_getclock();
 #endif
     qemu_mutex_unlock_iothread();
@@ -1955,105 +1276,6 @@ static int tcg_cpu_exec(CPUState *cpu)
     return ret;
 }
 
-
-#if defined(CONFIG_FLEXUS)
-
-static int qflex_tcg_cpu_exec(CPUState *cpu, QFlexExecType_t type)
-{
-    int ret;
-#ifdef CONFIG_PROFILER
-    int64_t ti;
-    ti = profile_getclock();
-#endif
-    qemu_mutex_unlock_iothread();
-    cpu_exec_start(cpu);
-    ret = qflex_cpu_exec(cpu,type);
-    cpu_exec_end(cpu);
-    qemu_mutex_lock_iothread();
-#ifdef CONFIG_PROFILER
-    tcg_time += profile_getclock() - ti;
-#endif
-    return ret;
-}
-
-int qflex_cpu_step(CPUState *cpu, QFlexExecType_t type)
-{
-    int r = 0;
-
-    /* Account partial waits to QEMU_CLOCK_VIRTUAL.  */
-    qemu_account_warp_timer();
-
-    /* Run the timers here.  This is much more efficient than
-     * waking up the I/O thread and waiting for completion.
-     */
-    handle_icount_deadline();
-
-    if (!cpu->queued_work_first && !cpu->exit_request) {
-        atomic_mb_set(&tcg_current_rr_cpu, cpu);
-        PTH_UPDATE_CONTEXT
-        PTH(current_cpu) = cpu;
-
-        qemu_clock_enable(QEMU_CLOCK_VIRTUAL,
-                          (cpu->singlestep_enabled & SSTEP_NOTIMER) == 0);
-
-        if (cpu_can_run(cpu)) {
-
-            prepare_icount_for_run(cpu);
-            r = qflex_tcg_cpu_exec(cpu, type);
-            process_icount_data(cpu);
-
-            switch (r) {
-            case EXCP_DEBUG:
-                cpu_handle_guest_debug(cpu);
-                break;
-            case EXCP_HALTED:
-                /* during start-up the vCPU is reset and the thread is
-                 * kicked several times. If we don't ensure we go back
-                 * to sleep in the halted state we won't cleanly
-                 * start-up when the vCPU is enabled.
-                 *
-                 * cpu->halted should ensure we sleep in wait_io_event
-                 */
-                g_assert(cpu->halted);
-                break;
-            case EXCP_ATOMIC:
-                qemu_mutex_unlock_iothread();
-                cpu_exec_step_atomic(cpu);
-                qemu_mutex_lock_iothread();
-            default:
-                /* Ignore everything else? */
-                break;
-            }
-        } else if (cpu->unplug) {
-            qemu_tcg_destroy_vcpu(cpu);
-            cpu->created = false;
-            qemu_cond_signal(&qemu_cpu_cond);
-            qemu_mutex_unlock_iothread();
-            /* tcg_cpu_exec() output is defined in cpu-all.h
-             * if qflex needs to check for unplugged cpu
-             * catch qflex defined number
-             */
-            r = 0x3F00D; // Random assigned number for now
-        }
-
-        PTH_YIELD;
-    }
-
-
-    /* Does not need atomic_mb_set because a spurious wakeup is okay.  */
-    atomic_set(&tcg_current_rr_cpu, NULL);
-
-    if(cpu->exit_request) {
-        atomic_mb_set(&cpu->exit_request, 0);
-    }
-    qemu_tcg_wait_io_event(cpu);
-
-    return r;
-}
-
-#endif /* CONFIG_FLEXUS */ /* CONFIG_FA_QFLEX */
-
-
 /* Destroy any remaining vCPUs which have been unplugged and have
  * finished running
  */
@@ -2066,6 +1288,7 @@ static void deal_with_unplugged_cpus(void)
             qemu_tcg_destroy_vcpu(cpu);
             cpu->created = false;
             qemu_cond_signal(&qemu_cpu_cond);
+            break;
         }
     }
 }
@@ -2081,8 +1304,6 @@ static void deal_with_unplugged_cpus(void)
 
 static void *qemu_tcg_rr_cpu_thread_fn(void *arg)
 {
-    PTH_UPDATE_CONTEXT
-
     CPUState *cpu = arg;
 
     rcu_register_thread();
@@ -2103,7 +1324,7 @@ static void *qemu_tcg_rr_cpu_thread_fn(void *arg)
 
         /* process any pending work */
         CPU_FOREACH(cpu) {
-            PTH(current_cpu) = cpu;
+            current_cpu = cpu;
             qemu_wait_io_event_common(cpu);
         }
     }
@@ -2115,22 +1336,6 @@ static void *qemu_tcg_rr_cpu_thread_fn(void *arg)
     /* process any pending work */
     cpu->exit_request = 1;
 
-#ifdef CONFIG_FLEXUS
-    int counter = 0, init_counter = 0;
-    bool initialize[64] = {false}, completed[64] = {false}, ff = unlikely(qflex_loglevel_mask(QFLEX_LOG_FF));
-
-    if (!ff) {
-        if (flexus_state.mode == TIMING) {
-            goto _label_start_timing;
-        }
-        else if (!qflex_trace_enabled && flexus_state.mode == TRACE) {
-            qflex_trace_enabled = true;
-            qflex_log_mask(QFLEX_LOG_GENERAL, "QFLEX: TRACE START\n"
-                    "    -> Starting trace simulation. Enabling callbacks into Flexus.\n");
-        }
-    }
-
-#endif
     while (1) {
         /* Account partial waits to QEMU_CLOCK_VIRTUAL.  */
         qemu_account_warp_timer();
@@ -2147,13 +1352,13 @@ static void *qemu_tcg_rr_cpu_thread_fn(void *arg)
         while (cpu && !cpu->queued_work_first && !cpu->exit_request) {
 
             atomic_mb_set(&tcg_current_rr_cpu, cpu);
-            PTH(current_cpu) = cpu;
+            current_cpu = cpu;
 
             qemu_clock_enable(QEMU_CLOCK_VIRTUAL,
                               (cpu->singlestep_enabled & SSTEP_NOTIMER) == 0);
 
-            int r = 0;
             if (cpu_can_run(cpu)) {
+                int r;
 
                 prepare_icount_for_run(cpu);
 
@@ -2161,18 +1366,6 @@ static void *qemu_tcg_rr_cpu_thread_fn(void *arg)
 
                 process_icount_data(cpu);
 
-#ifdef CONFIG_QUANTUM
-                if ( quantum_state.quantum_value > 0 ) {
-                    if(cpu->hasReachedInstrLimit){
-                        cpu->hasReachedInstrLimit = false;
-                    }
-                }
-                // for debugging purposes
-                if (r == EXCP_INTERRUPT || r == EXCP_HLT || r == EXCP_DEBUG
-                        || r == EXCP_HALTED || r == EXCP_YIELD || r == EXCP_ATOMIC) {
-                    cpu->nr_exp[r-EXCP_INTERRUPT]++;
-                }
-#endif /* CONFIG_QUANTUM */
                 if (r == EXCP_DEBUG) {
                     cpu_handle_guest_debug(cpu);
                     break;
@@ -2189,39 +1382,7 @@ static void *qemu_tcg_rr_cpu_thread_fn(void *arg)
                 break;
             }
 
-#ifdef CONFIG_FLEXUS
-            if (ff) {
-                if(init_counter == smp_cpus && (ARM_CPU(cpu)->env.pc >> 32) == 0 && !completed[cpu->cpu_index]){
-                    counter = 0;
-                    CPUState *bkp_cpu = first_cpu;
-                    CPU_FOREACH(bkp_cpu) {
-                        completed[bkp_cpu->cpu_index] = false;
-                        if((ARM_CPU(bkp_cpu)->env.pc >> 32) == 0){
-                            qflex_log_mask(QFLEX_LOG_GENERAL, "QFLEX: Core #%u completed FF step.\n",bkp_cpu->cpu_index);
-                            completed[bkp_cpu->cpu_index] = true;
-                            counter++;
-                        }
-                    }
-                    if(counter == smp_cpus) {
-                        // only break for timing, just enable callbacks in trace
-                        if (flexus_state.mode == TIMING)
-                            break;
-                        else if (!qflex_trace_enabled && flexus_state.mode == TRACE) {
-                            qflex_trace_enabled = true;
-                            qflex_log_mask(QFLEX_LOG_GENERAL, "QFLEX: TRACE START\n"
-                                            "    -> Starting trace simulation. Enabling callbacks into Flexus.\n");
-                        }
-                    }
-                } else if(init_counter < smp_cpus && !initialize[cpu->cpu_index]){
-                    initialize[cpu->cpu_index] = true;
-                    init_counter += 1;
-                }
-            } 
-#endif
             cpu = CPU_NEXT(cpu);
-
-            PTH_YIELD
-
         } /* while (cpu && !cpu->exit_request).. */
 
         /* Does not need atomic_mb_set because a spurious wakeup is okay.  */
@@ -2230,38 +1391,16 @@ static void *qemu_tcg_rr_cpu_thread_fn(void *arg)
         if (cpu && cpu->exit_request) {
             atomic_mb_set(&cpu->exit_request, 0);
         }
+
         qemu_tcg_wait_io_event(cpu ? cpu : QTAILQ_FIRST(&cpus));
         deal_with_unplugged_cpus();
-#ifdef CONFIG_FLEXUS
-        if ((flexus_state.mode == TIMING) && (counter == smp_cpus)) {
-            qflex_log_mask(QFLEX_LOG_GENERAL, "QFLEX: Cores successfully fast-forwarded to User mode\n");
-            goto _label_start_timing;
-        }
-#endif
     }
-#ifdef CONFIG_FLEXUS
-    if (flexus_state.mode == TIMING){
-_label_start_timing:
-        qflex_log_mask(QFLEX_LOG_GENERAL, "QFLEX: TIMING START\n"
-                                          "    -> Starting timing simulation. Passing control to Flexus.\n");
-        qflex_control_with_flexus = true;
-        startFlexus();
-    }
-    qflex_log_mask(QFLEX_LOG_GENERAL, "QFLEX: Went outside QEMU and Flexus loops\n");
-    CPU_FOREACH(cpu) {
-        cpu->stop = true;
-        cpu->unplug = true;
-    }
-    deal_with_unplugged_cpus();
-    qemu_mutex_unlock_iothread();
-#endif /* CONFIG_FLEXUS */
 
     return NULL;
 }
 
 static void *qemu_hax_cpu_thread_fn(void *arg)
 {
-    PTH_UPDATE_CONTEXT
     CPUState *cpu = arg;
     int r;
 
@@ -2271,7 +1410,8 @@ static void *qemu_hax_cpu_thread_fn(void *arg)
     cpu->thread_id = qemu_get_thread_id();
     cpu->created = true;
     cpu->halted = 0;
-    PTH(current_cpu) = cpu;
+    current_cpu = cpu;
+
     hax_init_vcpu(cpu);
     qemu_cond_signal(&qemu_cpu_cond);
 
@@ -2309,7 +1449,6 @@ static void CALLBACK dummy_apc_func(ULONG_PTR unused)
 
 static void *qemu_tcg_cpu_thread_fn(void *arg)
 {
-    PTH_UPDATE_CONTEXT
     CPUState *cpu = arg;
 
     g_assert(!use_icount);
@@ -2322,19 +1461,7 @@ static void *qemu_tcg_cpu_thread_fn(void *arg)
     cpu->thread_id = qemu_get_thread_id();
     cpu->created = true;
     cpu->can_do_io = 1;
-#ifdef CONFIG_QUANTUM
-    cpu->nr_instr = 0;
-    cpu->hasReachedInstrLimit = false;
-    cpu->nr_total_instr = 0;
-    cpu->nr_quantumHits = 0;
-    cpu->nr_exp[0] = 0;
-    cpu->nr_exp[1] = 0;
-    cpu->nr_exp[2] = 0;
-    cpu->nr_exp[3] = 0;
-    cpu->nr_exp[4] = 0;
-    cpu->nr_exp[5] = 0;
-#endif /* CONFIG_QUANTUM */
-    PTH(current_cpu) = cpu;
+    current_cpu = cpu;
     qemu_cond_signal(&qemu_cpu_cond);
 
     /* process any pending work */
@@ -2390,11 +1517,7 @@ static void qemu_cpu_kick_thread(CPUState *cpu)
         return;
     }
     cpu->thread_kicked = true;
-#ifndef CONFIG_PTH
     err = pthread_kill(cpu->thread->thread, SIG_IPI);
-#else
-    err = pthpthread_kill(cpu->thread->wrapper.pth_thread, SIG_IPI);
-#endif
     if (err) {
         fprintf(stderr, "qemu:%s: %s", __func__, strerror(err));
         exit(1);
@@ -2431,9 +1554,8 @@ void qemu_cpu_kick(CPUState *cpu)
 
 void qemu_cpu_kick_self(void)
 {
-    PTH_UPDATE_CONTEXT
-    assert(PTH(current_cpu));
-    qemu_cpu_kick_thread(PTH(current_cpu));
+    assert(current_cpu);
+    qemu_cpu_kick_thread(current_cpu);
 }
 
 bool qemu_cpu_is_self(CPUState *cpu)
@@ -2443,31 +1565,27 @@ bool qemu_cpu_is_self(CPUState *cpu)
 
 bool qemu_in_vcpu_thread(void)
 {
-    PTH_UPDATE_CONTEXT
-    return PTH(current_cpu) && qemu_cpu_is_self(PTH(current_cpu));
+    return current_cpu && qemu_cpu_is_self(current_cpu);
 }
-#ifndef CONFIG_PTH
+
 static __thread bool iothread_locked = false;
-#endif
+
 bool qemu_mutex_iothread_locked(void)
 {
-    PTH_UPDATE_CONTEXT
-    return PTH(iothread_locked);
+    return iothread_locked;
 }
 
 void qemu_mutex_lock_iothread(void)
 {
-    PTH_UPDATE_CONTEXT
     g_assert(!qemu_mutex_iothread_locked());
     qemu_mutex_lock(&qemu_global_mutex);
-    PTH(iothread_locked) = true;
+    iothread_locked = true;
 }
 
 void qemu_mutex_unlock_iothread(void)
 {
-    PTH_UPDATE_CONTEXT
     g_assert(qemu_mutex_iothread_locked());
-    PTH(iothread_locked) = false;
+    iothread_locked = false;
     qemu_mutex_unlock(&qemu_global_mutex);
 }
 
@@ -2666,11 +1784,10 @@ void qemu_init_vcpu(CPUState *cpu)
 
 void cpu_stop_current(void)
 {
-    PTH_UPDATE_CONTEXT
-    if (PTH(current_cpu)) {
-        PTH(current_cpu)->stop = false;
-        PTH(current_cpu)->stopped = true;
-        cpu_exit(PTH(current_cpu));
+    if (current_cpu) {
+        current_cpu->stop = false;
+        current_cpu->stopped = true;
+        cpu_exit(current_cpu);
         qemu_cond_broadcast(&qemu_pause_cond);
     }
 }
@@ -2929,40 +2046,3 @@ void dump_drift_info(FILE *f, fprintf_function cpu_fprintf)
         cpu_fprintf(f, "Max guest advance   NA\n");
     }
 }
-#ifdef CONFIG_FLEXUS
-//NOOSHIN: test begin
-int get_info(void *opaque){
-    CPUState* cpu = (CPUState*)opaque;
-
-    int r = 0;
-    printf("QEMU: in get_info\n");
-
-    /* Account partial waits to QEMU_CLOCK_VIRTUAL.  */
-    qemu_account_warp_timer();
-
-    qemu_clock_enable(QEMU_CLOCK_VIRTUAL,
-                      (cpu->singlestep_enabled & SSTEP_NOTIMER) == 0);
-
-    if (cpu_can_run(cpu)) {
-        r = tcg_cpu_exec(cpu);
-        if (r == EXCP_DEBUG) {
-            cpu_handle_guest_debug(cpu);
-
-        }
-    }
-    /* Pairs with smp_wmb in qemu_cpu_kick.  */
-    // atomic_mb_set(&exit_request, 0);
-
-    if (use_icount) {
-        int64_t deadline = qemu_clock_deadline_ns_all(QEMU_CLOCK_VIRTUAL);
-
-        if (deadline == 0) {
-            qemu_clock_notify(QEMU_CLOCK_VIRTUAL);
-        }
-    }
-    qemu_tcg_wait_io_event(QTAILQ_FIRST(&cpus));
-
-    return 0;
-}
-//NOOSHIN: test end
-#endif /* CONFIG_FLEXUS */

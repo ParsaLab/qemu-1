@@ -1,47 +1,3 @@
-//  DO-NOT-REMOVE begin-copyright-block
-// QFlex consists of several software components that are governed by various
-// licensing terms, in addition to software that was developed internally.
-// Anyone interested in using QFlex needs to fully understand and abide by the
-// licenses governing all the software components.
-// 
-// ### Software developed externally (not by the QFlex group)
-// 
-//     * [NS-3] (https://www.gnu.org/copyleft/gpl.html)
-//     * [QEMU] (http://wiki.qemu.org/License)
-//     * [SimFlex] (http://parsa.epfl.ch/simflex/)
-//     * [GNU PTH] (https://www.gnu.org/software/pth/)
-// 
-// ### Software developed internally (by the QFlex group)
-// **QFlex License**
-// 
-// QFlex
-// Copyright (c) 2020, Parallel Systems Architecture Lab, EPFL
-// All rights reserved.
-// 
-// Redistribution and use in source and binary forms, with or without modification,
-// are permitted provided that the following conditions are met:
-// 
-//     * Redistributions of source code must retain the above copyright notice,
-//       this list of conditions and the following disclaimer.
-//     * Redistributions in binary form must reproduce the above copyright notice,
-//       this list of conditions and the following disclaimer in the documentation
-//       and/or other materials provided with the distribution.
-//     * Neither the name of the Parallel Systems Architecture Laboratory, EPFL,
-//       nor the names of its contributors may be used to endorse or promote
-//       products derived from this software without specific prior written
-//       permission.
-// 
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
-// ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
-// WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-// DISCLAIMED. IN NO EVENT SHALL THE PARALLEL SYSTEMS ARCHITECTURE LABORATORY,
-// EPFL BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
-// GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
-// HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
-// LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
-// THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-//  DO-NOT-REMOVE end-copyright-block
 /*
  *  emulator main execution loop
  *
@@ -79,18 +35,6 @@
 #endif
 #include "sysemu/cpus.h"
 #include "sysemu/replay.h"
-
-#if defined(CONFIG_FLEXUS)
-#include "qflex/qflex.h"
-#endif /* CONFIG_FLEXUS */
-
-#ifdef CONFIG_QUANTUM
-#define QUANTUM_LIMIT \
-    !cpu->hasReachedInstrLimit
-
-#else // CONFIG_QUANTUM
-#define QUANTUM_LIMIT 1
-#endif
 
 /* -icount align implementation. */
 
@@ -659,7 +603,6 @@ static inline bool cpu_handle_interrupt(CPUState *cpu,
     return false;
 }
 
-
 static inline void cpu_loop_exec_tb(CPUState *cpu, TranslationBlock *tb,
                                     TranslationBlock **last_tb, int *tb_exit)
 {
@@ -711,19 +654,16 @@ static inline void cpu_loop_exec_tb(CPUState *cpu, TranslationBlock *tb,
 #endif
 }
 
-
 /* main execution loop */
 
 int cpu_exec(CPUState *cpu)
 {
-    PTH_UPDATE_CONTEXT;
-
     CPUClass *cc = CPU_GET_CLASS(cpu);
     int ret;
     SyncClocks sc = { 0 };
 
     /* replay_interrupt may need current_cpu */
-    PTH(current_cpu) = cpu;
+    current_cpu = cpu;
 
     if (cpu_handle_halt(cpu)) {
         return EXCP_HALTED;
@@ -747,148 +687,31 @@ int cpu_exec(CPUState *cpu)
          * siglongjmp. There were bug reports for gcc 4.5.0 and clang.
          * Reload essential local variables here for those compilers.
          * Newer versions of gcc would complain about this code (-Wclobbered). */
-        cpu = PTH(current_cpu);
+        cpu = current_cpu;
         cc = CPU_GET_CLASS(cpu);
 #else /* buggy compiler */
         /* Assert that the compiler does not smash local variables. */
-        g_assert(cpu == PTH(current_cpu));
+        g_assert(cpu == current_cpu);
         g_assert(cc == CPU_GET_CLASS(cpu));
 #endif /* buggy compiler */
-#ifndef CONFIG_SOFTMMU
-        tcg_debug_assert(!have_mmap_lock());
-#endif
         cpu->can_do_io = 1;
         tb_lock_reset();
         if (qemu_mutex_iothread_locked()) {
             qemu_mutex_unlock_iothread();
         }
-    }
-#if defined(CONFIG_FLEXUS)
-    QFLEX_INIT_LOOP();
-#endif
-
-    if (cpu->exception_index >= 0 ){
-        ret = cpu->exception_index;
-    } else if(cpu->interrupt_request > 0){
-        ret = cpu->interrupt_request;
     }
 
     /* if an exception is pending, we execute it here */
-    while (!cpu_handle_exception(cpu, &ret) && QUANTUM_LIMIT) {
-        TranslationBlock *last_tb = NULL;
-        int tb_exit = 0;
-
-        while (!cpu_handle_interrupt(cpu, &last_tb) && QUANTUM_LIMIT) {
-            TranslationBlock *tb;
-
-#if defined(CONFIG_FLEXUS)
-            QFLEX_CHECK_LOOP(cpu);
-#endif
-
-            tb = tb_find(cpu, last_tb, tb_exit);
-            cpu_loop_exec_tb(cpu, tb, &last_tb, &tb_exit);
-            /* Try to align the host and virtual clocks
-               if the guest is in advance */
-            align_clocks(&sc, cpu);
-        }
-    }
-
-    cc->cpu_exec_exit(cpu);
-    rcu_read_unlock();
-
-    return ret;
-}
-
-
-
-#if defined(CONFIG_FLEXUS)
-int qflex_cpu_exec(CPUState *cpu, QFlexExecType_t type)
-{
-    PTH_UPDATE_CONTEXT;
-
-    CPUClass *cc = CPU_GET_CLASS(cpu);
-    int ret;
-    SyncClocks sc = { 0 };
-
-    PTH(current_cpu) = cpu;
-
-    if (cpu_handle_halt(cpu)) {
-        return EXCP_HALTED;
-    }
-
-    rcu_read_lock();
-    cc->cpu_exec_enter(cpu);
-
-    /* Calculate difference between guest clock and host clock.
-     * This delay includes the delay of the last cycle, so
-     * what we have to do is sleep until it is 0. As for the
-     * advance/delay we gain here, we try to fix it next time.
-     */
-    init_delay_params(&sc, cpu);
-
-    /* prepare setjmp context for exception handling */
-    if (sigsetjmp(cpu->jmp_env, 0) != 0) { // Jump point in case of FAULT
-#if defined(__clang__) || !QEMU_GNUC_PREREQ(4, 6)
-        /* Some compilers wrongly smash all local variables after
-         * siglongjmp. There were bug reports for gcc 4.5.0 and clang.
-         * Reload essential local variables here for those compilers.
-         * Newer versions of gcc would complain about this code (-Wclobbered). */
-        cpu = PTH(current_cpu);
-        cc = CPU_GET_CLASS(cpu);
-#else /* buggy compiler */
-        /* Assert that the compiler does not smash local variables. */
-        g_assert(cpu == PTH(current_cpu));
-        g_assert(cc == CPU_GET_CLASS(cpu));
-#endif /* buggy compiler */
-#ifndef CONFIG_SOFTMMU
-        tcg_debug_assert(!have_mmap_lock());
-#endif
-        cpu->can_do_io = 1;
-        tb_lock_reset();
-        if (qemu_mutex_iothread_locked()) {
-            qemu_mutex_unlock_iothread();
-        }
-    }
-
-    if (cpu->exception_index >= 0 ){
-        ret = cpu->exception_index;
-    } else if(cpu->interrupt_request > 0){
-        ret = cpu->interrupt_request;
-    }
-
     while (!cpu_handle_exception(cpu, &ret)) {
         TranslationBlock *last_tb = NULL;
         int tb_exit = 0;
 
         while (!cpu_handle_interrupt(cpu, &last_tb)) {
-
             TranslationBlock *tb = tb_find(cpu, last_tb, tb_exit);
             cpu_loop_exec_tb(cpu, tb, &last_tb, &tb_exit);
             /* Try to align the host and virtual clocks
                if the guest is in advance */
             align_clocks(&sc, cpu);
-
-            /* Exit to the main loop/Flexus depending on mode */
-            switch(type) {
-                case SINGLESTEP:
-                    if(qflex_is_inst_done()){
-                        atomic_set(&cpu->exit_request, 1);
-                        cpu->exception_index = EXCP_INTERRUPT;
-                    }
-                    break;
-                case PROLOGUE:
-                    if(qflex_is_inst_done()){
-                        qflex_update_prologue_done(((CPUArchState *)(cpu->env_ptr))->pc);
-                        if(qflex_is_prologue_done()){
-                            atomic_set(&cpu->exit_request, 1);
-                            cpu->exception_index = EXCP_INTERRUPT;
-                        }
-                    }
-                    break;
-                default:
-                    g_assert_not_reached(); // for def case
-                    break;
-            }
         }
     }
 
@@ -897,4 +720,3 @@ int qflex_cpu_exec(CPUState *cpu, QFlexExecType_t type)
 
     return ret;
 }
-#endif /* CONFIG_FLEXUS */

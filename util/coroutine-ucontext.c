@@ -1,47 +1,3 @@
-//  DO-NOT-REMOVE begin-copyright-block
-// QFlex consists of several software components that are governed by various
-// licensing terms, in addition to software that was developed internally.
-// Anyone interested in using QFlex needs to fully understand and abide by the
-// licenses governing all the software components.
-// 
-// ### Software developed externally (not by the QFlex group)
-// 
-//     * [NS-3] (https://www.gnu.org/copyleft/gpl.html)
-//     * [QEMU] (http://wiki.qemu.org/License)
-//     * [SimFlex] (http://parsa.epfl.ch/simflex/)
-//     * [GNU PTH] (https://www.gnu.org/software/pth/)
-// 
-// ### Software developed internally (by the QFlex group)
-// **QFlex License**
-// 
-// QFlex
-// Copyright (c) 2020, Parallel Systems Architecture Lab, EPFL
-// All rights reserved.
-// 
-// Redistribution and use in source and binary forms, with or without modification,
-// are permitted provided that the following conditions are met:
-// 
-//     * Redistributions of source code must retain the above copyright notice,
-//       this list of conditions and the following disclaimer.
-//     * Redistributions in binary form must reproduce the above copyright notice,
-//       this list of conditions and the following disclaimer in the documentation
-//       and/or other materials provided with the distribution.
-//     * Neither the name of the Parallel Systems Architecture Laboratory, EPFL,
-//       nor the names of its contributors may be used to endorse or promote
-//       products derived from this software without specific prior written
-//       permission.
-// 
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
-// ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
-// WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-// DISCLAIMED. IN NO EVENT SHALL THE PARALLEL SYSTEMS ARCHITECTURE LABORATORY,
-// EPFL BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
-// GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
-// HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
-// LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
-// THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-//  DO-NOT-REMOVE end-copyright-block
 /*
  * ucontext coroutine initialization code
  *
@@ -70,9 +26,7 @@
 #include <ucontext.h>
 #include "qemu-common.h"
 #include "qemu/coroutine_int.h"
-#include "include/qemu/thread.h"
 
-#ifndef CONFIG_PTH
 #ifdef CONFIG_VALGRIND_H
 #include <valgrind/valgrind.h>
 #endif
@@ -88,24 +42,12 @@ typedef struct {
 #endif
 
 } CoroutineUContext;
-#else
-#include "util/coroutine-ucontext-pth.h"
-#endif
-
-#if defined(__SANITIZE_ADDRESS__) || __has_feature(address_sanitizer)
-#ifdef HAVE_ASAN_IFACE_FIBER
-#define CONFIG_ASAN 1
-#include <sanitizer/asan_interface.h>
-#endif
-#endif
 
 /**
  * Per-thread coroutine bookkeeping
  */
-#ifndef CONFIG_PTH
 static __thread CoroutineUContext leader;
 static __thread Coroutine *current;
-#endif
 
 /*
  * va_args to makecontext() must be type 'int', so passing
@@ -117,44 +59,11 @@ union cc_arg {
     int i[2];
 };
 
-static void finish_switch_fiber(void *fake_stack_save, bool update_leader_for_nest)
-{
-#ifdef CONFIG_ASAN
-    const void *bottom_old;
-    size_t size_old;
-
-    __sanitizer_finish_switch_fiber(fake_stack_save, &bottom_old, &size_old);
-    /* Gnu PTH */
-    PTH_UPDATE_CONTEXT;
-    if (update_leader_for_nest) {
-        PTH(leader).stack = (void *)bottom_old;
-        PTH(leader).stack_size = size_old;
-    }
-#endif
-}
-
-static void start_switch_fiber(void **fake_stack_save,
-                               const void *bottom, size_t size)
-{
-#ifdef CONFIG_ASAN
-#ifdef CONFIG_PTH
-    /* Change the stack associated with this coroutine in the PTH library too */
-    pth_wrapper *cur = pth_get_wrapper();
-    pth_swap_cur_thread_sstate(cur->pth_thread,bottom,size); // from pth.h
-#endif /* CONFIG_PTH */
-    __sanitizer_start_switch_fiber(fake_stack_save, bottom, size);
-#endif /* CONFIG_ASAN */
-}
-
 static void coroutine_trampoline(int i0, int i1)
 {
-    PTH_UPDATE_CONTEXT;
     union cc_arg arg;
     CoroutineUContext *self;
     Coroutine *co;
-    void *fake_stack_save = NULL;
-
-    finish_switch_fiber(NULL,true);
 
     arg.i[0] = i0;
     arg.i[1] = i1;
@@ -163,12 +72,8 @@ static void coroutine_trampoline(int i0, int i1)
 
     /* Initialize longjmp environment and switch back the caller */
     if (!sigsetjmp(self->env, 0)) {
-        start_switch_fiber(&fake_stack_save,
-                           PTH(leader).stack, PTH(leader).stack_size);
         siglongjmp(*(sigjmp_buf *)co->entry_arg, 1);
     }
-
-    finish_switch_fiber(fake_stack_save,false);
 
     while (true) {
         co->entry(co->entry_arg);
@@ -182,7 +87,6 @@ Coroutine *qemu_coroutine_new(void)
     ucontext_t old_uc, uc;
     sigjmp_buf old_env;
     union cc_arg arg = {0};
-    void *fake_stack_save = NULL;
 
     /* The ucontext functions preserve signal masks which incurs a
      * system call overhead.  sigsetjmp(buf, 0)/siglongjmp() does not
@@ -218,12 +122,8 @@ Coroutine *qemu_coroutine_new(void)
 
     /* swapcontext() in, siglongjmp() back out */
     if (!sigsetjmp(old_env, 0)) {
-        start_switch_fiber(&fake_stack_save, co->stack, co->stack_size);
         swapcontext(&old_uc, &uc);
     }
-
-    finish_switch_fiber(fake_stack_save,false);
-
     return &co->base;
 }
 
@@ -266,37 +166,28 @@ CoroutineAction __attribute__((noinline))
 qemu_coroutine_switch(Coroutine *from_, Coroutine *to_,
                       CoroutineAction action)
 {
-    PTH_UPDATE_CONTEXT;
     CoroutineUContext *from = DO_UPCAST(CoroutineUContext, base, from_);
     CoroutineUContext *to = DO_UPCAST(CoroutineUContext, base, to_);
     int ret;
-    void *fake_stack_save = NULL;
 
-    PTH(current) = to_;
+    current = to_;
 
     ret = sigsetjmp(from->env, 0);
     if (ret == 0) {
-        start_switch_fiber(action == COROUTINE_TERMINATE ?
-                           NULL : &fake_stack_save, to->stack, to->stack_size);
         siglongjmp(to->env, action);
     }
-
-    finish_switch_fiber(fake_stack_save,false);
-
     return ret;
 }
 
 Coroutine *qemu_coroutine_self(void)
 {
-    PTH_UPDATE_CONTEXT;
-    if (!PTH(current)) {
-        PTH(current) = &PTH(leader).base;
+    if (!current) {
+        current = &leader.base;
     }
-    return PTH(current);
+    return current;
 }
 
 bool qemu_in_coroutine(void)
 {
-    PTH_UPDATE_CONTEXT;
-    return PTH(current) && PTH(current)->caller;
+    return current && current->caller;
 }

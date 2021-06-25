@@ -1,65 +1,198 @@
-#  DO-NOT-REMOVE begin-copyright-block
-# QFlex consists of several software components that are governed by various
-# licensing terms, in addition to software that was developed internally.
-# Anyone interested in using QFlex needs to fully understand and abide by the
-# licenses governing all the software components.
-#
-# ### Software developed externally (not by the QFlex group)
-#
-#     * [NS-3] (https://www.gnu.org/copyleft/gpl.html)
-#     * [QEMU] (http://wiki.qemu.org/License)
-#     * [SimFlex] (http://parsa.epfl.ch/simflex/)
-#     * [GNU PTH] (https://www.gnu.org/software/pth/)
-#
-# ### Software developed internally (by the QFlex group)
-# **QFlex License**
-#
-# QFlex
-# Copyright (c) 2020, Parallel Systems Architecture Lab, EPFL
-# All rights reserved.
-#
-# Redistribution and use in source and binary forms, with or without modification,
-# are permitted provided that the following conditions are met:
-#
-#     * Redistributions of source code must retain the above copyright notice,
-#       this list of conditions and the following disclaimer.
-#     * Redistributions in binary form must reproduce the above copyright notice,
-#       this list of conditions and the following disclaimer in the documentation
-#       and/or other materials provided with the distribution.
-#     * Neither the name of the Parallel Systems Architecture Laboratory, EPFL,
-#       nor the names of its contributors may be used to endorse or promote
-#       products derived from this software without specific prior written
-#       permission.
-#
-# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
-# ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
-# WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-# DISCLAIMED. IN NO EVENT SHALL THE PARALLEL SYSTEMS ARCHITECTURE LABORATORY,
-# EPFL BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-# CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
-# GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
-# HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
-# LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
-# THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-#  DO-NOT-REMOVE end-copyright-block
-
-dist: bionic
+sudo: false
 language: c
-sudo: required
-branches:
-  only:
-    - master
-    - dev
+python:
+  - "2.4"
+compiler:
+  - gcc
+cache: ccache
+addons:
+  apt:
+    packages:
+      # Build dependencies
+      - libaio-dev
+      - libattr1-dev
+      - libbrlapi-dev
+      - libcap-ng-dev
+      - libgnutls-dev
+      - libgtk-3-dev
+      - libiscsi-dev
+      - liblttng-ust-dev
+      - libnfs-dev
+      - libncurses5-dev
+      - libnss3-dev
+      - libpixman-1-dev
+      - libpng12-dev
+      - librados-dev
+      - libsdl1.2-dev
+      - libseccomp-dev
+      - libspice-protocol-dev
+      - libspice-server-dev
+      - libssh2-1-dev
+      - liburcu-dev
+      - libusb-1.0-0-dev
+      - libvte-2.90-dev
+      - sparse
+      - uuid-dev
 
+# The channel name "irc.oftc.net#qemu" is encrypted against qemu/qemu
+# to prevent IRC notifications from forks. This was created using:
+# $ travis encrypt -r "qemu/qemu" "irc.oftc.net#qemu"
+notifications:
+  irc:
+    channels:
+      - secure: "F7GDRgjuOo5IUyRLqSkmDL7kvdU4UcH3Lm/W2db2JnDHTGCqgEdaYEYKciyCLZ57vOTsTsOgesN8iUT7hNHBd1KWKjZe9KDTZWppWRYVwAwQMzVeSOsbbU4tRoJ6Pp+3qhH1Z0eGYR9ZgKYAoTumDFgSAYRp4IscKS8jkoedOqM="
+    on_success: change
+    on_failure: always
+env:
+  global:
+    - TEST_CMD="make check"
+    - MAKEFLAGS="-j3"
+  matrix:
+    - CONFIG=""
+    - CONFIG="--enable-debug --enable-debug-tcg --enable-trace-backends=log"
+    - CONFIG="--disable-linux-aio --disable-cap-ng --disable-attr --disable-brlapi --disable-uuid --disable-libusb"
+    - CONFIG="--enable-modules"
+    - CONFIG="--with-coroutine=ucontext"
+    - CONFIG="--with-coroutine=sigaltstack"
 git:
-  submodules: true
+  # we want to do this ourselves
+  submodules: false
+before_install:
+  - if [ "$TRAVIS_OS_NAME" == "osx" ]; then brew update ; fi
+  - if [ "$TRAVIS_OS_NAME" == "osx" ]; then brew install libffi gettext glib pixman ; fi
+  - wget -O - http://people.linaro.org/~alex.bennee/qemu-submodule-git-seed.tar.xz | tar -xvJ
+  - git submodule update --init --recursive
+before_script:
+  - ./configure ${CONFIG}
+script:
+  - make ${MAKEFLAGS} && ${TEST_CMD}
 matrix:
   include:
-    - env: # Test only build
-      - MODE="emulation"
-    - env:
-      - MODE="trace"
-    - env:
-      - MODE="timing"
-script:
-  - ${TRAVIS_BUILD_DIR}/tests/travis/build_test.sh ${MODE}
+    # Test with CLang for compile portability
+    - env: CONFIG=""
+      compiler: clang
+    # gprof/gcov are GCC features
+    - env: CONFIG="--enable-gprof --enable-gcov --disable-pie"
+      compiler: gcc
+    # We manually include builds which we disable "make check" for
+    - env: CONFIG="--enable-debug --enable-tcg-interpreter"
+           TEST_CMD=""
+      compiler: gcc
+    - env: CONFIG="--enable-trace-backends=simple"
+           TEST_CMD=""
+      compiler: gcc
+    - env: CONFIG="--enable-trace-backends=ftrace"
+           TEST_CMD=""
+      compiler: gcc
+    - env: CONFIG="--enable-trace-backends=ust"
+           TEST_CMD=""
+      compiler: gcc
+    - env: CONFIG="--disable-tcg"
+           TEST_CMD=""
+      compiler: gcc
+    - env: CONFIG=""
+      os: osx
+      compiler: clang
+    # Plain Trusty System Build
+    - env: CONFIG="--disable-linux-user"
+      sudo: required
+      addons:
+      dist: trusty
+      compiler: gcc
+      before_install:
+        - sudo apt-get update -qq
+        - sudo apt-get build-dep -qq qemu
+        - wget -O - http://people.linaro.org/~alex.bennee/qemu-submodule-git-seed.tar.xz | tar -xvJ
+        - git submodule update --init --recursive
+    # Plain Trusty Linux User Build
+    - env: CONFIG="--disable-system"
+      sudo: required
+      addons:
+      dist: trusty
+      compiler: gcc
+      before_install:
+        - sudo apt-get update -qq
+        - sudo apt-get build-dep -qq qemu
+        - wget -O - http://people.linaro.org/~alex.bennee/qemu-submodule-git-seed.tar.xz | tar -xvJ
+        - git submodule update --init --recursive
+    # Trusty System build with latest stable clang
+    - sudo: required
+      addons:
+      dist: trusty
+      language: generic
+      compiler: none
+      env:
+        - COMPILER_NAME=clang CXX=clang++-3.9 CC=clang-3.9
+        - CONFIG="--disable-linux-user --cc=clang-3.9 --cxx=clang++-3.9"
+      before_install:
+        - wget -nv -O - http://llvm.org/apt/llvm-snapshot.gpg.key | sudo apt-key add -
+        - sudo apt-add-repository -y 'deb http://llvm.org/apt/trusty llvm-toolchain-trusty-3.9 main'
+        - sudo apt-get update -qq
+        - sudo apt-get install -qq -y clang-3.9
+        - sudo apt-get build-dep -qq qemu
+        - wget -O - http://people.linaro.org/~alex.bennee/qemu-submodule-git-seed.tar.xz | tar -xvJ
+        - git submodule update --init --recursive
+      before_script:
+        - ./configure ${CONFIG} || cat config.log
+    # Trusty Linux User build with latest stable clang
+    - sudo: required
+      addons:
+      dist: trusty
+      language: generic
+      compiler: none
+      env:
+        - COMPILER_NAME=clang CXX=clang++-3.9 CC=clang-3.9
+        - CONFIG="--disable-system --cc=clang-3.9 --cxx=clang++-3.9"
+      before_install:
+        - wget -nv -O - http://llvm.org/apt/llvm-snapshot.gpg.key | sudo apt-key add -
+        - sudo apt-add-repository -y 'deb http://llvm.org/apt/trusty llvm-toolchain-trusty-3.9 main'
+        - sudo apt-get update -qq
+        - sudo apt-get install -qq -y clang-3.9
+        - sudo apt-get build-dep -qq qemu
+        - wget -O - http://people.linaro.org/~alex.bennee/qemu-submodule-git-seed.tar.xz | tar -xvJ
+        - git submodule update --init --recursive
+      before_script:
+        - ./configure ${CONFIG} || cat config.log
+    # Using newer GCC with sanitizers
+    - addons:
+        apt:
+          sources:
+            # PPAs for newer toolchains
+            - ubuntu-toolchain-r-test
+          packages:
+            # Extra toolchains
+            - gcc-5
+            - g++-5
+            # Build dependencies
+            - libaio-dev
+            - libattr1-dev
+            - libbrlapi-dev
+            - libcap-ng-dev
+            - libgnutls-dev
+            - libgtk-3-dev
+            - libiscsi-dev
+            - liblttng-ust-dev
+            - libnfs-dev
+            - libncurses5-dev
+            - libnss3-dev
+            - libpixman-1-dev
+            - libpng12-dev
+            - librados-dev
+            - libsdl1.2-dev
+            - libseccomp-dev
+            - libspice-protocol-dev
+            - libspice-server-dev
+            - libssh2-1-dev
+            - liburcu-dev
+            - libusb-1.0-0-dev
+            - libvte-2.90-dev
+            - sparse
+            - uuid-dev
+      language: generic
+      compiler: none
+      env:
+        - COMPILER_NAME=gcc CXX=g++-5 CC=gcc-5
+        - CONFIG="--cc=gcc-5 --cxx=g++-5 --disable-pie --disable-linux-user"
+        - TEST_CMD=""
+      before_script:
+        - ./configure ${CONFIG} --extra-cflags="-g3 -O0 -fsanitize=thread -fuse-ld=gold" || cat config.log

@@ -19,14 +19,14 @@ def gen_visit_decl(name, scalar=False):
     c_type = c_name(name) + ' *'
     if not scalar:
         c_type += '*'
-    return mcgen(u'''
+    return mcgen('''
 void visit_type_%(c_name)s(Visitor *v, const char *name, %(c_type)sobj, Error **errp);
 ''',
                  c_name=c_name(name), c_type=c_type)
 
 
 def gen_visit_members_decl(name):
-    return mcgen(u'''
+    return mcgen('''
 
 void visit_type_%(c_name)s_members(Visitor *v, %(c_name)s *obj, Error **errp);
 ''',
@@ -34,7 +34,7 @@ void visit_type_%(c_name)s_members(Visitor *v, %(c_name)s *obj, Error **errp);
 
 
 def gen_visit_object_members(name, base, members, variants):
-    ret = mcgen(u'''
+    ret = mcgen('''
 
 void visit_type_%(c_name)s_members(Visitor *v, %(c_name)s *obj, Error **errp)
 {
@@ -44,7 +44,7 @@ void visit_type_%(c_name)s_members(Visitor *v, %(c_name)s *obj, Error **errp)
                 c_name=c_name(name))
 
     if base:
-        ret += mcgen(u'''
+        ret += mcgen('''
     visit_type_%(c_type)s_members(v, (%(c_type)s *)obj, &err);
     if (err) {
         goto out;
@@ -54,12 +54,12 @@ void visit_type_%(c_name)s_members(Visitor *v, %(c_name)s *obj, Error **errp)
 
     for memb in members:
         if memb.optional:
-            ret += mcgen(u'''
+            ret += mcgen('''
     if (visit_optional(v, "%(name)s", &obj->has_%(c_name)s)) {
 ''',
                          name=memb.name, c_name=c_name(memb.name))
             push_indent()
-        ret += mcgen(u'''
+        ret += mcgen('''
     visit_type_%(c_type)s(v, "%(name)s", &obj->%(c_name)s, &err);
     if (err) {
         goto out;
@@ -69,18 +69,18 @@ void visit_type_%(c_name)s_members(Visitor *v, %(c_name)s *obj, Error **errp)
                      c_name=c_name(memb.name))
         if memb.optional:
             pop_indent()
-            ret += mcgen(u'''
+            ret += mcgen('''
     }
 ''')
 
     if variants:
-        ret += mcgen(u'''
+        ret += mcgen('''
     switch (obj->%(c_name)s) {
 ''',
                      c_name=c_name(variants.tag_member.name))
 
         for var in variants.variants:
-            ret += mcgen(u'''
+            ret += mcgen('''
     case %(case)s:
         visit_type_%(c_type)s_members(v, &obj->u.%(c_name)s, &err);
         break;
@@ -90,7 +90,7 @@ void visit_type_%(c_name)s_members(Visitor *v, %(c_name)s *obj, Error **errp)
                                            variants.tag_member.type.prefix),
                          c_type=var.type.c_name(), c_name=c_name(var.name))
 
-        ret += mcgen(u'''
+        ret += mcgen('''
     default:
         abort();
     }
@@ -99,11 +99,11 @@ void visit_type_%(c_name)s_members(Visitor *v, %(c_name)s *obj, Error **errp)
     # 'goto out' produced for base, for each member, and if variants were
     # present
     if base or members or variants:
-        ret += mcgen(u'''
+        ret += mcgen('''
 
 out:
 ''')
-    ret += mcgen(u'''
+    ret += mcgen('''
     error_propagate(errp, err);
 }
 ''')
@@ -111,7 +111,7 @@ out:
 
 
 def gen_visit_list(name, element_type):
-    return mcgen(u'''
+    return mcgen('''
 
 void visit_type_%(c_name)s(Visitor *v, const char *name, %(c_name)s **obj, Error **errp)
 {
@@ -148,7 +148,7 @@ out:
 
 
 def gen_visit_enum(name):
-    return mcgen(u'''
+    return mcgen('''
 
 void visit_type_%(c_name)s(Visitor *v, const char *name, %(c_name)s *obj, Error **errp)
 {
@@ -161,7 +161,7 @@ void visit_type_%(c_name)s(Visitor *v, const char *name, %(c_name)s *obj, Error 
 
 
 def gen_visit_alternate(name, variants):
-    ret = mcgen(u'''
+    ret = mcgen('''
 
 void visit_type_%(c_name)s(Visitor *v, const char *name, %(c_name)s **obj, Error **errp)
 {
@@ -180,12 +180,12 @@ void visit_type_%(c_name)s(Visitor *v, const char *name, %(c_name)s **obj, Error
                  c_name=c_name(name))
 
     for var in variants.variants:
-        ret += mcgen(u'''
+        ret += mcgen('''
     case %(case)s:
 ''',
                      case=var.type.alternate_qtype())
         if isinstance(var.type, QAPISchemaObjectType):
-            ret += mcgen(u'''
+            ret += mcgen('''
         visit_start_struct(v, name, NULL, 0, &err);
         if (err) {
             break;
@@ -199,16 +199,16 @@ void visit_type_%(c_name)s(Visitor *v, const char *name, %(c_name)s **obj, Error
                          c_type=var.type.c_name(),
                          c_name=c_name(var.name))
         else:
-            ret += mcgen(u'''
+            ret += mcgen('''
         visit_type_%(c_type)s(v, name, &(*obj)->u.%(c_name)s, &err);
 ''',
                          c_type=var.type.c_name(),
                          c_name=c_name(var.name))
-        ret += mcgen(u'''
+        ret += mcgen('''
         break;
 ''')
 
-    ret += mcgen(u'''
+    ret += mcgen('''
     case QTYPE_NONE:
         abort();
     default:
@@ -231,7 +231,7 @@ out:
 
 
 def gen_visit_object(name, base, members, variants):
-    return mcgen(u'''
+    return mcgen('''
 
 void visit_type_%(c_name)s(Visitor *v, const char *name, %(c_name)s **obj, Error **errp)
 {
@@ -367,7 +367,7 @@ h_comment = '''
                             'qapi-visit.c', 'qapi-visit.h',
                             c_comment, h_comment)
 
-fdef.write(mcgen(u'''
+fdef.write(mcgen('''
 #include "qemu/osdep.h"
 #include "qemu-common.h"
 #include "qapi/error.h"
@@ -375,7 +375,7 @@ fdef.write(mcgen(u'''
 ''',
                  prefix=prefix))
 
-fdecl.write(mcgen(u'''
+fdecl.write(mcgen('''
 #include "qapi/visitor.h"
 #include "qapi/qmp/qerror.h"
 #include "%(prefix)sqapi-types.h"

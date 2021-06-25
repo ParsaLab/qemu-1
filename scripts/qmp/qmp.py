@@ -8,7 +8,6 @@
 # This work is licensed under the terms of the GNU GPL, version 2.  See
 # the COPYING file in the top-level directory.
 
-from __future__ import print_function
 import json
 import errno
 import socket
@@ -85,7 +84,7 @@ class QEMUMonitorProtocol(object):
             resp = json.loads(data)
             if 'event' in resp:
                 if self._debug:
-                    print("QMP:<<< %s" % resp, file=sys.stderr)
+                    print >>sys.stderr, "QMP:<<< %s" % resp
                 self.__events.append(resp)
                 if not only_event:
                     continue
@@ -166,7 +165,7 @@ class QEMUMonitorProtocol(object):
                 been closed
         """
         if self._debug:
-            print("QMP:>>> %s" % qmp_cmd, file=sys.stderr)
+            print >>sys.stderr, "QMP:>>> %s" % qmp_cmd
         try:
             self.__sock.sendall(json.dumps(qmp_cmd))
         except socket.error as err:
@@ -175,7 +174,7 @@ class QEMUMonitorProtocol(object):
             raise socket.error(err)
         resp = self.__json_read()
         if self._debug:
-            print("QMP:<<< %s" % resp, file=sys.stderr)
+            print >>sys.stderr, "QMP:<<< %s" % resp
         return resp
 
     def cmd(self, name, args=None, cmd_id=None):

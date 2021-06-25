@@ -1,47 +1,3 @@
-//  DO-NOT-REMOVE begin-copyright-block
-// QFlex consists of several software components that are governed by various
-// licensing terms, in addition to software that was developed internally.
-// Anyone interested in using QFlex needs to fully understand and abide by the
-// licenses governing all the software components.
-// 
-// ### Software developed externally (not by the QFlex group)
-// 
-//     * [NS-3] (https://www.gnu.org/copyleft/gpl.html)
-//     * [QEMU] (http://wiki.qemu.org/License)
-//     * [SimFlex] (http://parsa.epfl.ch/simflex/)
-//     * [GNU PTH] (https://www.gnu.org/software/pth/)
-// 
-// ### Software developed internally (by the QFlex group)
-// **QFlex License**
-// 
-// QFlex
-// Copyright (c) 2020, Parallel Systems Architecture Lab, EPFL
-// All rights reserved.
-// 
-// Redistribution and use in source and binary forms, with or without modification,
-// are permitted provided that the following conditions are met:
-// 
-//     * Redistributions of source code must retain the above copyright notice,
-//       this list of conditions and the following disclaimer.
-//     * Redistributions in binary form must reproduce the above copyright notice,
-//       this list of conditions and the following disclaimer in the documentation
-//       and/or other materials provided with the distribution.
-//     * Neither the name of the Parallel Systems Architecture Laboratory, EPFL,
-//       nor the names of its contributors may be used to endorse or promote
-//       products derived from this software without specific prior written
-//       permission.
-// 
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
-// ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
-// WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-// DISCLAIMED. IN NO EVENT SHALL THE PARALLEL SYSTEMS ARCHITECTURE LABORATORY,
-// EPFL BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
-// GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
-// HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
-// LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
-// THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-//  DO-NOT-REMOVE end-copyright-block
 /*
  * Block driver for the Virtual Disk Image (VDI) format
  *
@@ -223,50 +179,50 @@ typedef struct {
 
 static void vdi_header_to_cpu(VdiHeader *header)
 {
-    header->signature = le32_to_cpu(header->signature);
-    header->version = le32_to_cpu(header->version);
-    header->header_size = le32_to_cpu(header->header_size);
-    header->image_type = le32_to_cpu(header->image_type);
-    header->image_flags = le32_to_cpu(header->image_flags);
-    header->offset_bmap = le32_to_cpu(header->offset_bmap);
-    header->offset_data = le32_to_cpu(header->offset_data);
-    header->cylinders = le32_to_cpu(header->cylinders);
-    header->heads = le32_to_cpu(header->heads);
-    header->sectors = le32_to_cpu(header->sectors);
-    header->sector_size = le32_to_cpu(header->sector_size);
-    header->disk_size = le64_to_cpu(header->disk_size);
-    header->block_size = le32_to_cpu(header->block_size);
-    header->block_extra = le32_to_cpu(header->block_extra);
-    header->blocks_in_image = le32_to_cpu(header->blocks_in_image);
-    header->blocks_allocated = le32_to_cpu(header->blocks_allocated);
-    header->uuid_image = qemu_uuid_bswap(header->uuid_image);
-    header->uuid_last_snap = qemu_uuid_bswap(header->uuid_last_snap);
-    header->uuid_link = qemu_uuid_bswap(header->uuid_link);
-    header->uuid_parent = qemu_uuid_bswap(header->uuid_parent);
+    le32_to_cpus(&header->signature);
+    le32_to_cpus(&header->version);
+    le32_to_cpus(&header->header_size);
+    le32_to_cpus(&header->image_type);
+    le32_to_cpus(&header->image_flags);
+    le32_to_cpus(&header->offset_bmap);
+    le32_to_cpus(&header->offset_data);
+    le32_to_cpus(&header->cylinders);
+    le32_to_cpus(&header->heads);
+    le32_to_cpus(&header->sectors);
+    le32_to_cpus(&header->sector_size);
+    le64_to_cpus(&header->disk_size);
+    le32_to_cpus(&header->block_size);
+    le32_to_cpus(&header->block_extra);
+    le32_to_cpus(&header->blocks_in_image);
+    le32_to_cpus(&header->blocks_allocated);
+    qemu_uuid_bswap(&header->uuid_image);
+    qemu_uuid_bswap(&header->uuid_last_snap);
+    qemu_uuid_bswap(&header->uuid_link);
+    qemu_uuid_bswap(&header->uuid_parent);
 }
 
 static void vdi_header_to_le(VdiHeader *header)
 {
-    header->signature = cpu_to_le32(header->signature);
-    header->version = cpu_to_le32(header->version);
-    header->header_size = cpu_to_le32(header->header_size);
-    header->image_type = cpu_to_le32(header->image_type);
-    header->image_flags = cpu_to_le32(header->image_flags);
-    header->offset_bmap = cpu_to_le32(header->offset_bmap);
-    header->offset_data = cpu_to_le32(header->offset_data);
-    header->cylinders = cpu_to_le32(header->cylinders);
-    header->heads = cpu_to_le32(header->heads);
-    header->sectors = cpu_to_le32(header->sectors);
-    header->sector_size = cpu_to_le32(header->sector_size);
-    header->disk_size = cpu_to_le64(header->disk_size);
-    header->block_size = cpu_to_le32(header->block_size);
-    header->block_extra = cpu_to_le32(header->block_extra);
-    header->blocks_in_image = cpu_to_le32(header->blocks_in_image);
-    header->blocks_allocated = cpu_to_le32(header->blocks_allocated);
-    header->uuid_image = qemu_uuid_bswap(header->uuid_image);
-    header->uuid_last_snap = qemu_uuid_bswap(header->uuid_last_snap);
-    header->uuid_link = qemu_uuid_bswap(header->uuid_link);
-    header->uuid_parent = qemu_uuid_bswap(header->uuid_parent);
+    cpu_to_le32s(&header->signature);
+    cpu_to_le32s(&header->version);
+    cpu_to_le32s(&header->header_size);
+    cpu_to_le32s(&header->image_type);
+    cpu_to_le32s(&header->image_flags);
+    cpu_to_le32s(&header->offset_bmap);
+    cpu_to_le32s(&header->offset_data);
+    cpu_to_le32s(&header->cylinders);
+    cpu_to_le32s(&header->heads);
+    cpu_to_le32s(&header->sectors);
+    cpu_to_le32s(&header->sector_size);
+    cpu_to_le64s(&header->disk_size);
+    cpu_to_le32s(&header->block_size);
+    cpu_to_le32s(&header->block_extra);
+    cpu_to_le32s(&header->blocks_in_image);
+    cpu_to_le32s(&header->blocks_allocated);
+    qemu_uuid_bswap(&header->uuid_image);
+    qemu_uuid_bswap(&header->uuid_last_snap);
+    qemu_uuid_bswap(&header->uuid_link);
+    qemu_uuid_bswap(&header->uuid_parent);
 }
 
 #if defined(CONFIG_VDI_DEBUG)
@@ -406,9 +362,6 @@ static int vdi_open(BlockDriverState *bs, QDict *options, int flags,
     size_t bmap_size;
     int ret;
     Error *local_err = NULL;
-    QemuUUID uuid_link;
-    QemuUUID uuid_parent;
-
 
     bs->file = bdrv_open_child(NULL, options, "file", bs, &child_file,
                                false, errp);
@@ -422,9 +375,6 @@ static int vdi_open(BlockDriverState *bs, QDict *options, int flags,
     if (ret < 0) {
         goto fail;
     }
-
-    uuid_link = header.uuid_link;
-    uuid_parent = header.uuid_parent;
 
     vdi_header_to_cpu(&header);
 #if defined(CONFIG_VDI_DEBUG)
@@ -487,11 +437,11 @@ static int vdi_open(BlockDriverState *bs, QDict *options, int flags,
                    (uint64_t)header.blocks_in_image * header.block_size);
         ret = -ENOTSUP;
         goto fail;
-    } else if (!qemu_uuid_is_null(&uuid_link)) {
+    } else if (!qemu_uuid_is_null(&header.uuid_link)) {
         error_setg(errp, "unsupported VDI image (non-NULL link UUID)");
         ret = -ENOTSUP;
         goto fail;
-    } else if (!qemu_uuid_is_null(&uuid_parent)) {
+    } else if (!qemu_uuid_is_null(&header.uuid_parent)) {
         error_setg(errp, "unsupported VDI image (non-NULL parent UUID)");
         ret = -ENOTSUP;
         goto fail;
@@ -780,7 +730,6 @@ static int vdi_create(const char *filename, QemuOpts *opts, Error **errp)
     Error *local_err = NULL;
     BlockBackend *blk = NULL;
     uint32_t *bmap = NULL;
-    QemuUUID uuid;
 
     logout("\n");
 
@@ -846,10 +795,8 @@ static int vdi_create(const char *filename, QemuOpts *opts, Error **errp)
     if (image_type == VDI_TYPE_STATIC) {
         header.blocks_allocated = blocks;
     }
-    qemu_uuid_generate(&uuid);
-    header.uuid_image = uuid;
-    qemu_uuid_generate(&uuid);
-    header.uuid_last_snap = uuid;
+    qemu_uuid_generate(&header.uuid_image);
+    qemu_uuid_generate(&header.uuid_last_snap);
     /* There is no need to set header.uuid_link or header.uuid_parent here. */
 #if defined(CONFIG_VDI_DEBUG)
     vdi_header_print(&header);

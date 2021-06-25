@@ -16,7 +16,7 @@ from qapi import *
 
 
 def gen_command_decl(name, arg_type, boxed, ret_type):
-    return mcgen(u'''
+    return mcgen('''
 %(c_type)s qmp_%(c_name)s(%(params)s);
 ''',
                  c_type=(ret_type and ret_type.c_type()) or 'void',
@@ -42,13 +42,13 @@ def gen_call(name, arg_type, boxed, ret_type):
     if ret_type:
         lhs = 'retval = '
 
-    ret = mcgen(u'''
+    ret = mcgen('''
 
     %(lhs)sqmp_%(c_name)s(%(args)s&err);
 ''',
                 c_name=c_name(name), args=argstr, lhs=lhs)
     if ret_type:
-        ret += mcgen(u'''
+        ret += mcgen('''
     if (err) {
         goto out;
     }
@@ -60,7 +60,7 @@ def gen_call(name, arg_type, boxed, ret_type):
 
 
 def gen_marshal_output(ret_type):
-    return mcgen(u'''
+    return mcgen('''
 
 static void qmp_marshal_output_%(c_name)s(%(c_type)s ret_in, QObject **ret_out, Error **errp)
 {
@@ -88,7 +88,7 @@ def build_marshal_proto(name):
 
 
 def gen_marshal_decl(name):
-    return mcgen(u'''
+    return mcgen('''
 %(proto)s;
 ''',
                  proto=build_marshal_proto(name))
@@ -97,7 +97,7 @@ def gen_marshal_decl(name):
 def gen_marshal(name, arg_type, boxed, ret_type):
     have_args = arg_type and not arg_type.is_empty()
 
-    ret = mcgen(u'''
+    ret = mcgen('''
 
 %(proto)s
 {
@@ -106,7 +106,7 @@ def gen_marshal(name, arg_type, boxed, ret_type):
                 proto=build_marshal_proto(name))
 
     if ret_type:
-        ret += mcgen(u'''
+        ret += mcgen('''
     %(c_type)s retval;
 ''',
                      c_type=ret_type.c_type())
@@ -114,7 +114,7 @@ def gen_marshal(name, arg_type, boxed, ret_type):
     if have_args:
         visit_members = ('visit_type_%s_members(v, &arg, &err);'
                          % arg_type.c_name())
-        ret += mcgen(u'''
+        ret += mcgen('''
     Visitor *v;
     %(c_name)s arg = {0};
 
@@ -122,14 +122,14 @@ def gen_marshal(name, arg_type, boxed, ret_type):
                      c_name=arg_type.c_name())
     else:
         visit_members = ''
-        ret += mcgen(u'''
+        ret += mcgen('''
     Visitor *v = NULL;
 
     if (args) {
 ''')
         push_indent()
 
-    ret += mcgen(u'''
+    ret += mcgen('''
     v = qobject_input_visitor_new(QOBJECT(args));
     visit_start_struct(v, NULL, NULL, 0, &err);
     if (err) {
@@ -148,13 +148,13 @@ def gen_marshal(name, arg_type, boxed, ret_type):
 
     if not have_args:
         pop_indent()
-        ret += mcgen(u'''
+        ret += mcgen('''
     }
 ''')
 
     ret += gen_call(name, arg_type, boxed, ret_type)
 
-    ret += mcgen(u'''
+    ret += mcgen('''
 
 out:
     error_propagate(errp, err);
@@ -166,12 +166,12 @@ out:
                          % arg_type.c_name())
     else:
         visit_members = ''
-        ret += mcgen(u'''
+        ret += mcgen('''
     if (args) {
 ''')
         push_indent()
 
-    ret += mcgen(u'''
+    ret += mcgen('''
     v = qapi_dealloc_visitor_new();
     visit_start_struct(v, NULL, NULL, 0, NULL);
     %(visit_members)s
@@ -182,11 +182,11 @@ out:
 
     if not have_args:
         pop_indent()
-        ret += mcgen(u'''
+        ret += mcgen('''
     }
 ''')
 
-    ret += mcgen(u'''
+    ret += mcgen('''
 }
 ''')
     return ret
@@ -197,7 +197,7 @@ def gen_register_command(name, success_response):
     if not success_response:
         options = 'QCO_NO_SUCCESS_RESP'
 
-    ret = mcgen(u'''
+    ret = mcgen('''
     qmp_register_command(cmds, "%(name)s",
                          qmp_marshal_%(c_name)s, %(opts)s);
 ''',
@@ -207,7 +207,7 @@ def gen_register_command(name, success_response):
 
 
 def gen_registry(registry):
-    ret = mcgen(u'''
+    ret = mcgen('''
 
 void %(c_prefix)sqmp_init_marshal(QmpCommandList *cmds)
 {
@@ -216,7 +216,7 @@ void %(c_prefix)sqmp_init_marshal(QmpCommandList *cmds)
 ''',
                 c_prefix=c_name(prefix, protect=False))
     ret += registry
-    ret += mcgen(u'''
+    ret += mcgen('''
 }
 ''')
     return ret
@@ -255,7 +255,7 @@ class QAPISchemaGenCommandVisitor(QAPISchemaVisitor):
 
 (input_file, output_dir, do_c, do_h, prefix, opts) = parse_command_line()
 
-c_comment = u'''
+c_comment = '''
 /*
  * schema-defined QMP->QAPI command dispatch
  *
@@ -269,7 +269,7 @@ c_comment = u'''
  *
  */
 '''
-h_comment = u'''
+h_comment = '''
 /*
  * schema-defined QAPI function prototypes
  *
@@ -288,7 +288,7 @@ h_comment = u'''
                             'qmp-marshal.c', 'qmp-commands.h',
                             c_comment, h_comment)
 
-fdef.write(mcgen(u'''
+fdef.write(mcgen('''
 #include "qemu/osdep.h"
 #include "qemu-common.h"
 #include "qemu/module.h"
@@ -304,7 +304,7 @@ fdef.write(mcgen(u'''
 ''',
                  prefix=prefix))
 
-fdecl.write(mcgen(u'''
+fdecl.write(mcgen('''
 #include "%(prefix)sqapi-types.h"
 #include "qapi/qmp/qdict.h"
 #include "qapi/qmp/dispatch.h"

@@ -250,7 +250,7 @@ class QEMUMachine(object):
     def qmp(self, cmd, conv_keys=True, **args):
         '''Invoke a QMP command and return the response dict'''
         qmp_args = dict()
-        for key, value in args.items():
+        for key, value in args.iteritems():
             if conv_keys:
                 qmp_args[key.replace('_', '-')] = value
             else:

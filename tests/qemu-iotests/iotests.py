@@ -16,8 +16,6 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #
 
-from __future__ import print_function
-
 import errno
 import os
 import re
@@ -146,7 +144,7 @@ def filter_qmp_event(event):
 def log(msg, filters=[]):
     for flt in filters:
         msg = flt(msg)
-    print(msg)
+    print msg
 
 class Timeout:
     def __init__(self, seconds, errmsg = "Timeout"):
@@ -387,7 +385,7 @@ class QMPTestCase(unittest.TestCase):
     def wait_ready_and_cancel(self, drive='drive0'):
         self.wait_ready(drive=drive)
         event = self.cancel_and_wait(drive=drive)
-        self.assertEqual(event['event'], 'BLOCK_JOB_COMPLETED')
+        self.assertEquals(event['event'], 'BLOCK_JOB_COMPLETED')
         self.assert_qmp(event, 'data/type', 'mirror')
         self.assert_qmp(event, 'data/offset', event['data']['len'])
 
@@ -420,7 +418,7 @@ def notrun(reason):
     seq = os.path.basename(sys.argv[0])
 
     open('%s/%s.notrun' % (output_dir, seq), 'wb').write(reason + '\n')
-    print('%s not run: %s' % (seq, reason))
+    print '%s not run: %s' % (seq, reason)
     sys.exit(0)
 
 def verify_image_format(supported_fmts=[], unsupported_fmts=[]):
@@ -461,17 +459,13 @@ def main(supported_fmts=[], supported_oses=['linux']):
 
     # We need to filter out the time taken from the output so that qemu-iotest
     # can reliably diff the results against master output.
-    try:
-        import io
-    except ImportError:
-        # Python 2 fallback
-        import StringIO as io
+    import StringIO
     if debug:
         output = sys.stdout
         verbosity = 2
         sys.argv.remove('-d')
     else:
-        output = io.StringIO()
+        output = StringIO.StringIO()
 
     class MyTestRunner(unittest.TextTestRunner):
         def __init__(self, stream=output, descriptions=True, verbosity=verbosity):

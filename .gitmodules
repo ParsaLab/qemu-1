@@ -34,7 +34,3 @@
 [submodule "roms/QemuMacDrivers"]
 	path = roms/QemuMacDrivers
 	url = git://git.qemu.org/QemuMacDrivers.git
-[submodule "pth"]
-	path = pth
-	url = https://github.com/parsa-epfl/pth.git
-	ignore = dirty

@@ -1,47 +1,3 @@
-//  DO-NOT-REMOVE begin-copyright-block
-// QFlex consists of several software components that are governed by various
-// licensing terms, in addition to software that was developed internally.
-// Anyone interested in using QFlex needs to fully understand and abide by the
-// licenses governing all the software components.
-// 
-// ### Software developed externally (not by the QFlex group)
-// 
-//     * [NS-3] (https://www.gnu.org/copyleft/gpl.html)
-//     * [QEMU] (http://wiki.qemu.org/License)
-//     * [SimFlex] (http://parsa.epfl.ch/simflex/)
-//     * [GNU PTH] (https://www.gnu.org/software/pth/)
-// 
-// ### Software developed internally (by the QFlex group)
-// **QFlex License**
-// 
-// QFlex
-// Copyright (c) 2020, Parallel Systems Architecture Lab, EPFL
-// All rights reserved.
-// 
-// Redistribution and use in source and binary forms, with or without modification,
-// are permitted provided that the following conditions are met:
-// 
-//     * Redistributions of source code must retain the above copyright notice,
-//       this list of conditions and the following disclaimer.
-//     * Redistributions in binary form must reproduce the above copyright notice,
-//       this list of conditions and the following disclaimer in the documentation
-//       and/or other materials provided with the distribution.
-//     * Neither the name of the Parallel Systems Architecture Laboratory, EPFL,
-//       nor the names of its contributors may be used to endorse or promote
-//       products derived from this software without specific prior written
-//       permission.
-// 
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
-// ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
-// WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-// DISCLAIMED. IN NO EVENT SHALL THE PARALLEL SYSTEMS ARCHITECTURE LABORATORY,
-// EPFL BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
-// GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
-// HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
-// LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
-// THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-//  DO-NOT-REMOVE end-copyright-block
 /*
  * QEMU System Emulator
  *
@@ -1618,9 +1574,8 @@ static void ram_save_cleanup(void *opaque)
     /* caller have hold iothread lock or is in a bh, so there is
      * no writing race against this migration_bitmap
      */
-#ifndef CONFIG_EXTSNAP
-        memory_global_dirty_log_stop();
-#endif
+    memory_global_dirty_log_stop();
+
     QLIST_FOREACH_RCU(block, &ram_list.blocks, next) {
         g_free(block->bmap);
         block->bmap = NULL;
@@ -2105,15 +2060,12 @@ static int ram_state_init(RAMState **rsp)
     /* Skip setting bitmap if there is no RAM */
     if (ram_bytes_total()) {
         RAMBlock *block;
+
         QLIST_FOREACH_RCU(block, &ram_list.blocks, next) {
             unsigned long pages = block->max_length >> TARGET_PAGE_BITS;
 
             block->bmap = bitmap_new(pages);
-#ifdef CONFIG_EXTSNAP
-            bitmap_clear(block->bmap, 0, pages);
-#else
             bitmap_set(block->bmap, 0, pages);
-#endif
             if (migrate_postcopy_ram()) {
                 block->unsentmap = bitmap_new(pages);
                 bitmap_set(block->unsentmap, 0, pages);
@@ -2129,20 +2081,6 @@ static int ram_state_init(RAMState **rsp)
 
     memory_global_dirty_log_start();
     migration_bitmap_sync(*rsp);
-#ifdef CONFIG_EXTSNAP
-    /*
-     * If number of dirty pages wasn't changed,
-     * it tries to save empty snapshot,
-     * so we should prevent such behavior.
-     */
-    if ((*rsp)->migration_dirty_pages == (ram_bytes_total() >> TARGET_PAGE_BITS)) {
-        error_report("Empty snapshot cannot be saved!\n");
-        qemu_mutex_unlock_ramlist();
-        qemu_mutex_unlock_iothread();
-        rcu_read_unlock();
-        return -EINVAL;
-    }
-#endif
     qemu_mutex_unlock_ramlist();
     qemu_mutex_unlock_iothread();
     rcu_read_unlock();
@@ -2864,9 +2802,7 @@ static int ram_load(QEMUFile *f, void *opaque, int version_id)
                                  "accept migration", id);
                     ret = -EINVAL;
                 }
-#ifdef CONFIG_EXTSNAP
-                ram_list_clean(addr, block->used_length);
-#endif
+
                 total_ram_bytes -= length;
             }
             break;

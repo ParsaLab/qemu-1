@@ -136,5 +136,3 @@ trace-dtrace-root.h
 trace-dtrace-root.dtrace
 trace-ust-all.h
 trace-ust-all.c
-.ccls-cache/
-compile_commands.json
