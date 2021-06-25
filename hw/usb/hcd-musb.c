@@ -21,9 +21,9 @@
  * Only host-mode and non-DMA accesses are currently supported.
  */
 #include "qemu/osdep.h"
-#include "qemu-common.h"
 #include "qemu/timer.h"
 #include "hw/usb.h"
+#include "hw/usb/hcd-musb.h"
 #include "hw/irq.h"
 #include "hw/hw.h"
 
@@ -253,8 +253,8 @@
 /* #define MUSB_DEBUG */
 
 #ifdef MUSB_DEBUG
-#define TRACE(fmt,...) fprintf(stderr, "%s@%d: " fmt "\n", __FUNCTION__, \
-                               __LINE__, ##__VA_ARGS__)
+#define TRACE(fmt, ...) fprintf(stderr, "%s@%d: " fmt "\n", __func__, \
+                                __LINE__, ##__VA_ARGS__)
 #else
 #define TRACE(...)
 #endif
@@ -628,11 +628,11 @@ static void musb_packet(MUSBState *s, MUSBEndPoint *ep,
 
     /* A wild guess on the FADDR semantics... */
     dev = usb_find_device(&s->port, ep->faddr[idx]);
-    uep = usb_ep_get(dev, pid, ep->type[idx] & 0xf);
-    id = pid;
-    if (uep) {
-        id |= (dev->addr << 16) | (uep->nr << 8);
+    if (dev == NULL) {
+        return;
     }
+    uep = usb_ep_get(dev, pid, ep->type[idx] & 0xf);
+    id = pid | (dev->addr << 16) | (uep->nr << 8);
     usb_packet_setup(&ep->packey[dir].p, pid, uep, 0, id, false, true);
     usb_packet_addbuf(&ep->packey[dir].p, ep->buf[idx], len);
     ep->packey[dir].ep = ep;
@@ -1540,13 +1540,13 @@ static void musb_writew(void *opaque, hwaddr addr, uint32_t value)
     };
 }
 
-CPUReadMemoryFunc * const musb_read[] = {
+MUSBReadFunc * const musb_read[] = {
     musb_readb,
     musb_readh,
     musb_readw,
 };
 
-CPUWriteMemoryFunc * const musb_write[] = {
+MUSBWriteFunc * const musb_write[] = {
     musb_writeb,
     musb_writeh,
     musb_writew,

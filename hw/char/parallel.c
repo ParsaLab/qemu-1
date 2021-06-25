@@ -22,14 +22,23 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
+
 #include "qemu/osdep.h"
 #include "qapi/error.h"
-#include "hw/hw.h"
+#include "qemu/module.h"
 #include "chardev/char-parallel.h"
 #include "chardev/char-fe.h"
+#include "hw/acpi/aml-build.h"
+#include "hw/irq.h"
 #include "hw/isa/isa.h"
-#include "hw/i386/pc.h"
+#include "hw/qdev-properties.h"
+#include "hw/qdev-properties-system.h"
+#include "migration/vmstate.h"
+#include "hw/char/parallel.h"
+#include "sysemu/reset.h"
 #include "sysemu/sysemu.h"
+#include "trace.h"
+#include "qom/object.h"
 
 //#define DEBUG_PARALLEL
 
@@ -85,17 +94,16 @@ typedef struct ParallelState {
 } ParallelState;
 
 #define TYPE_ISA_PARALLEL "isa-parallel"
-#define ISA_PARALLEL(obj) \
-    OBJECT_CHECK(ISAParallelState, (obj), TYPE_ISA_PARALLEL)
+OBJECT_DECLARE_SIMPLE_TYPE(ISAParallelState, ISA_PARALLEL)
 
-typedef struct ISAParallelState {
+struct ISAParallelState {
     ISADevice parent_obj;
 
     uint32_t index;
     uint32_t iobase;
     uint32_t isairq;
     ParallelState state;
-} ISAParallelState;
+};
 
 static void parallel_update_irq(ParallelState *s)
 {
@@ -110,9 +118,8 @@ parallel_ioport_write_sw(void *opaque, uint32_t addr, uint32_t val)
 {
     ParallelState *s = opaque;
 
-    pdebug("write addr=0x%02x val=0x%02x\n", addr, val);
-
     addr &= 7;
+    trace_parallel_ioport_write("SW", addr, val);
     switch(addr) {
     case PARA_REG_DATA:
         s->dataw = val;
@@ -157,6 +164,7 @@ static void parallel_ioport_write_hw(void *opaque, uint32_t addr, uint32_t val)
     s->last_read_offset = ~0U;
 
     addr &= 7;
+    trace_parallel_ioport_write("HW", addr, val);
     switch(addr) {
     case PARA_REG_DATA:
         if (s->dataw == val)
@@ -230,6 +238,8 @@ parallel_ioport_eppdata_write_hw2(void *opaque, uint32_t addr, uint32_t val)
     struct ParallelIOArg ioarg = {
         .buffer = &eppdata, .count = sizeof(eppdata)
     };
+
+    trace_parallel_ioport_write("EPP", addr, val);
     if ((s->control & (PARA_CTR_DIR|PARA_CTR_SIGNAL)) != PARA_CTR_INIT) {
         /* Controls not correct for EPP data cycle, so do nothing */
         pdebug("we%04x s\n", val);
@@ -253,6 +263,8 @@ parallel_ioport_eppdata_write_hw4(void *opaque, uint32_t addr, uint32_t val)
     struct ParallelIOArg ioarg = {
         .buffer = &eppdata, .count = sizeof(eppdata)
     };
+
+    trace_parallel_ioport_write("EPP", addr, val);
     if ((s->control & (PARA_CTR_DIR|PARA_CTR_SIGNAL)) != PARA_CTR_INIT) {
         /* Controls not correct for EPP data cycle, so do nothing */
         pdebug("we%08x s\n", val);
@@ -299,7 +311,7 @@ static uint32_t parallel_ioport_read_sw(void *opaque, uint32_t addr)
         ret = s->control;
         break;
     }
-    pdebug("read addr=0x%02x val=0x%02x\n", addr, ret);
+    trace_parallel_ioport_read("SW", addr, ret);
     return ret;
 }
 
@@ -371,6 +383,7 @@ static uint32_t parallel_ioport_read_hw(void *opaque, uint32_t addr)
         }
         break;
     }
+    trace_parallel_ioport_read("HW", addr, ret);
     s->last_read_offset = addr;
     return ret;
 }
@@ -399,6 +412,7 @@ parallel_ioport_eppdata_read_hw2(void *opaque, uint32_t addr)
     }
     else
         pdebug("re%04x\n", ret);
+    trace_parallel_ioport_read("EPP", addr, ret);
     return ret;
 }
 
@@ -426,11 +440,13 @@ parallel_ioport_eppdata_read_hw4(void *opaque, uint32_t addr)
     }
     else
         pdebug("re%08x\n", ret);
+    trace_parallel_ioport_read("EPP", addr, ret);
     return ret;
 }
 
 static void parallel_ioport_ecp_write(void *opaque, uint32_t addr, uint32_t val)
 {
+    trace_parallel_ioport_write("ECP", addr & 7, val);
     pdebug("wecp%d=%02x\n", addr & 7, val);
 }
 
@@ -438,6 +454,7 @@ static uint32_t parallel_ioport_ecp_read(void *opaque, uint32_t addr)
 {
     uint8_t ret = 0xff;
 
+    trace_parallel_ioport_read("ECP", addr & 7, ret);
     pdebug("recp%d:%02x\n", addr & 7, ret);
     return ret;
 }
@@ -553,57 +570,48 @@ static void parallel_isa_realizefn(DeviceState *dev, Error **errp)
                              s, "parallel");
 }
 
+static void parallel_isa_build_aml(ISADevice *isadev, Aml *scope)
+{
+    ISAParallelState *isa = ISA_PARALLEL(isadev);
+    Aml *dev;
+    Aml *crs;
+
+    crs = aml_resource_template();
+    aml_append(crs, aml_io(AML_DECODE16, isa->iobase, isa->iobase, 0x08, 0x08));
+    aml_append(crs, aml_irq_no_flags(isa->isairq));
+
+    dev = aml_device("LPT%d", isa->index + 1);
+    aml_append(dev, aml_name_decl("_HID", aml_eisaid("PNP0400")));
+    aml_append(dev, aml_name_decl("_UID", aml_int(isa->index + 1)));
+    aml_append(dev, aml_name_decl("_STA", aml_int(0xf)));
+    aml_append(dev, aml_name_decl("_CRS", crs));
+
+    aml_append(scope, dev);
+}
+
 /* Memory mapped interface */
-static uint32_t parallel_mm_readb (void *opaque, hwaddr addr)
+static uint64_t parallel_mm_readfn(void *opaque, hwaddr addr, unsigned size)
 {
     ParallelState *s = opaque;
 
-    return parallel_ioport_read_sw(s, addr >> s->it_shift) & 0xFF;
+    return parallel_ioport_read_sw(s, addr >> s->it_shift) &
+        MAKE_64BIT_MASK(0, size * 8);
 }
 
-static void parallel_mm_writeb (void *opaque,
-                                hwaddr addr, uint32_t value)
+static void parallel_mm_writefn(void *opaque, hwaddr addr,
+                                uint64_t value, unsigned size)
 {
     ParallelState *s = opaque;
 
-    parallel_ioport_write_sw(s, addr >> s->it_shift, value & 0xFF);
-}
-
-static uint32_t parallel_mm_readw (void *opaque, hwaddr addr)
-{
-    ParallelState *s = opaque;
-
-    return parallel_ioport_read_sw(s, addr >> s->it_shift) & 0xFFFF;
-}
-
-static void parallel_mm_writew (void *opaque,
-                                hwaddr addr, uint32_t value)
-{
-    ParallelState *s = opaque;
-
-    parallel_ioport_write_sw(s, addr >> s->it_shift, value & 0xFFFF);
-}
-
-static uint32_t parallel_mm_readl (void *opaque, hwaddr addr)
-{
-    ParallelState *s = opaque;
-
-    return parallel_ioport_read_sw(s, addr >> s->it_shift);
-}
-
-static void parallel_mm_writel (void *opaque,
-                                hwaddr addr, uint32_t value)
-{
-    ParallelState *s = opaque;
-
-    parallel_ioport_write_sw(s, addr >> s->it_shift, value);
+    parallel_ioport_write_sw(s, addr >> s->it_shift,
+                             value & MAKE_64BIT_MASK(0, size * 8));
 }
 
 static const MemoryRegionOps parallel_mm_ops = {
-    .old_mmio = {
-        .read = { parallel_mm_readb, parallel_mm_readw, parallel_mm_readl },
-        .write = { parallel_mm_writeb, parallel_mm_writew, parallel_mm_writel },
-    },
+    .read = parallel_mm_readfn,
+    .write = parallel_mm_writefn,
+    .valid.min_access_size = 1,
+    .valid.max_access_size = 4,
     .endianness = DEVICE_NATIVE_ENDIAN,
 };
 
@@ -637,10 +645,12 @@ static Property parallel_isa_properties[] = {
 static void parallel_isa_class_initfn(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
+    ISADeviceClass *isa = ISA_DEVICE_CLASS(klass);
 
     dc->realize = parallel_isa_realizefn;
     dc->vmsd = &vmstate_parallel_isa;
-    dc->props = parallel_isa_properties;
+    isa->build_aml = parallel_isa_build_aml;
+    device_class_set_props(dc, parallel_isa_properties);
     set_bit(DEVICE_CATEGORY_INPUT, dc->categories);
 }
 

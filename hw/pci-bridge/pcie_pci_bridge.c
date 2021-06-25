@@ -9,25 +9,27 @@
 
 #include "qemu/osdep.h"
 #include "qapi/error.h"
+#include "qemu/module.h"
 #include "hw/pci/pci.h"
 #include "hw/pci/pci_bus.h"
 #include "hw/pci/pci_bridge.h"
 #include "hw/pci/msi.h"
 #include "hw/pci/shpc.h"
 #include "hw/pci/slotid_cap.h"
+#include "hw/qdev-properties.h"
+#include "qom/object.h"
 
-typedef struct PCIEPCIBridge {
+struct PCIEPCIBridge {
     /*< private >*/
     PCIBridge parent_obj;
 
     OnOffAuto msi;
     MemoryRegion shpc_bar;
     /*< public >*/
-} PCIEPCIBridge;
+};
 
 #define TYPE_PCIE_PCI_BRIDGE_DEV "pcie-pci-bridge"
-#define PCIE_PCI_BRIDGE_DEV(obj) \
-        OBJECT_CHECK(PCIEPCIBridge, (obj), TYPE_PCIE_PCI_BRIDGE_DEV)
+OBJECT_DECLARE_SIMPLE_TYPE(PCIEPCIBridge, PCIE_PCI_BRIDGE_DEV)
 
 static void pcie_pci_bridge_realize(PCIDevice *d, Error **errp)
 {
@@ -65,10 +67,18 @@ static void pcie_pci_bridge_realize(PCIDevice *d, Error **errp)
         goto aer_error;
     }
 
+    Error *local_err = NULL;
     if (pcie_br->msi != ON_OFF_AUTO_OFF) {
-        rc = msi_init(d, 0, 1, true, true, errp);
+        rc = msi_init(d, 0, 1, true, true, &local_err);
         if (rc < 0) {
-            goto msi_error;
+            assert(rc == -ENOTSUP);
+            if (pcie_br->msi != ON_OFF_AUTO_ON) {
+                error_free(local_err);
+            } else {
+                /* failed to satisfy user's explicit request for MSI */
+                error_propagate(errp, local_err);
+                goto msi_error;
+            }
         }
     }
     pci_register_bar(d, 0, PCI_BASE_ADDRESS_SPACE_MEMORY |
@@ -81,7 +91,7 @@ aer_error:
 pm_error:
     pcie_cap_exit(d);
 cap_error:
-    shpc_free(d);
+    shpc_cleanup(d, &pcie_br->shpc_bar);
 error:
     pci_bridge_exitfn(d);
 }
@@ -98,7 +108,9 @@ static void pcie_pci_bridge_reset(DeviceState *qdev)
 {
     PCIDevice *d = PCI_DEVICE(qdev);
     pci_bridge_reset(qdev);
-    msi_reset(d);
+    if (msi_present(d)) {
+        msi_reset(d);
+    }
     shpc_reset(d);
 }
 
@@ -106,17 +118,20 @@ static void pcie_pci_bridge_write_config(PCIDevice *d,
         uint32_t address, uint32_t val, int len)
 {
     pci_bridge_write_config(d, address, val, len);
-    msi_write_config(d, address, val, len);
+    if (msi_present(d)) {
+        msi_write_config(d, address, val, len);
+    }
     shpc_cap_write_config(d, address, val, len);
 }
 
 static Property pcie_pci_bridge_dev_properties[] = {
-        DEFINE_PROP_ON_OFF_AUTO("msi", PCIEPCIBridge, msi, ON_OFF_AUTO_ON),
+        DEFINE_PROP_ON_OFF_AUTO("msi", PCIEPCIBridge, msi, ON_OFF_AUTO_AUTO),
         DEFINE_PROP_END_OF_LIST(),
 };
 
 static const VMStateDescription pcie_pci_bridge_dev_vmstate = {
         .name = TYPE_PCIE_PCI_BRIDGE_DEV,
+        .priority = MIG_PRI_PCI_BUS,
         .fields = (VMStateField[]) {
             VMSTATE_PCI_DEVICE(parent_obj, PCIBridge),
             SHPC_VMSTATE(shpc, PCIDevice, NULL),
@@ -124,53 +139,25 @@ static const VMStateDescription pcie_pci_bridge_dev_vmstate = {
         }
 };
 
-static void pcie_pci_bridge_hotplug_cb(HotplugHandler *hotplug_dev,
-                                      DeviceState *dev, Error **errp)
-{
-    PCIDevice *pci_hotplug_dev = PCI_DEVICE(hotplug_dev);
-
-    if (!shpc_present(pci_hotplug_dev)) {
-        error_setg(errp, "standard hotplug controller has been disabled for "
-                   "this %s", TYPE_PCIE_PCI_BRIDGE_DEV);
-        return;
-    }
-    shpc_device_hotplug_cb(hotplug_dev, dev, errp);
-}
-
-static void pcie_pci_bridge_hot_unplug_request_cb(HotplugHandler *hotplug_dev,
-                                                 DeviceState *dev,
-                                                 Error **errp)
-{
-    PCIDevice *pci_hotplug_dev = PCI_DEVICE(hotplug_dev);
-
-    if (!shpc_present(pci_hotplug_dev)) {
-        error_setg(errp, "standard hotplug controller has been disabled for "
-                   "this %s", TYPE_PCIE_PCI_BRIDGE_DEV);
-        return;
-    }
-    shpc_device_hot_unplug_request_cb(hotplug_dev, dev, errp);
-}
-
 static void pcie_pci_bridge_class_init(ObjectClass *klass, void *data)
 {
     PCIDeviceClass *k = PCI_DEVICE_CLASS(klass);
     DeviceClass *dc = DEVICE_CLASS(klass);
     HotplugHandlerClass *hc = HOTPLUG_HANDLER_CLASS(klass);
 
-    k->is_express = 1;
-    k->is_bridge = 1;
+    k->is_bridge = true;
     k->vendor_id = PCI_VENDOR_ID_REDHAT;
     k->device_id = PCI_DEVICE_ID_REDHAT_PCIE_BRIDGE;
     k->realize = pcie_pci_bridge_realize;
     k->exit = pcie_pci_bridge_exit;
     k->config_write = pcie_pci_bridge_write_config;
     dc->vmsd = &pcie_pci_bridge_dev_vmstate;
-    dc->props = pcie_pci_bridge_dev_properties;
-    dc->vmsd = &pcie_pci_bridge_dev_vmstate;
+    device_class_set_props(dc, pcie_pci_bridge_dev_properties);
     dc->reset = &pcie_pci_bridge_reset;
     set_bit(DEVICE_CATEGORY_BRIDGE, dc->categories);
-    hc->plug = pcie_pci_bridge_hotplug_cb;
-    hc->unplug_request = pcie_pci_bridge_hot_unplug_request_cb;
+    hc->plug = pci_bridge_dev_plug_cb;
+    hc->unplug = pci_bridge_dev_unplug_cb;
+    hc->unplug_request = pci_bridge_dev_unplug_request_cb;
 }
 
 static const TypeInfo pcie_pci_bridge_info = {
@@ -180,6 +167,7 @@ static const TypeInfo pcie_pci_bridge_info = {
         .class_init = pcie_pci_bridge_class_init,
         .interfaces = (InterfaceInfo[]) {
             { TYPE_HOTPLUG_HANDLER },
+            { INTERFACE_PCIE_DEVICE },
             { },
         }
 };

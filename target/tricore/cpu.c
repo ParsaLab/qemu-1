@@ -6,7 +6,7 @@
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2 of the License, or (at your option) any later version.
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -20,21 +20,17 @@
 #include "qemu/osdep.h"
 #include "qapi/error.h"
 #include "cpu.h"
-#include "qemu-common.h"
 #include "exec/exec-all.h"
 #include "qemu/error-report.h"
-
-static hwaddr tricore_cpu_get_phys_page_attrs_debug(CPUState *cpu, vaddr addr,
-                                         MemTxAttrs *attrs)
-{
-    error_report("function cpu_get_phys_page_attrs_debug not "
-                    "implemented, aborting");
-    return -1;
-}
 
 static inline void set_feature(CPUTriCoreState *env, int feature)
 {
     env->features |= 1ULL << feature;
+}
+
+static gchar *tricore_gdb_arch_name(CPUState *cs)
+{
+    return g_strdup("tricore");
 }
 
 static void tricore_cpu_set_pc(CPUState *cs, vaddr value)
@@ -46,7 +42,7 @@ static void tricore_cpu_set_pc(CPUState *cs, vaddr value)
 }
 
 static void tricore_cpu_synchronize_from_tb(CPUState *cs,
-                                            TranslationBlock *tb)
+                                            const TranslationBlock *tb)
 {
     TriCoreCPU *cpu = TRICORE_CPU(cs);
     CPUTriCoreState *env = &cpu->env;
@@ -54,13 +50,14 @@ static void tricore_cpu_synchronize_from_tb(CPUState *cs,
     env->PC = tb->pc;
 }
 
-static void tricore_cpu_reset(CPUState *s)
+static void tricore_cpu_reset(DeviceState *dev)
 {
+    CPUState *s = CPU(dev);
     TriCoreCPU *cpu = TRICORE_CPU(s);
     TriCoreCPUClass *tcc = TRICORE_CPU_GET_CLASS(cpu);
     CPUTriCoreState *env = &cpu->env;
 
-    tcc->parent_reset(s);
+    tcc->parent_reset(dev);
 
     cpu_state_reset(env);
 }
@@ -104,15 +101,9 @@ static void tricore_cpu_realizefn(DeviceState *dev, Error **errp)
 
 static void tricore_cpu_initfn(Object *obj)
 {
-    CPUState *cs = CPU(obj);
     TriCoreCPU *cpu = TRICORE_CPU(obj);
-    CPUTriCoreState *env = &cpu->env;
 
-    cs->env_ptr = env;
-
-    if (tcg_enabled()) {
-        tricore_tcg_init();
-    }
+    cpu_set_cpustate_pointers(cpu);
 }
 
 static ObjectClass *tricore_cpu_class_by_name(const char *cpu_model)
@@ -120,11 +111,7 @@ static ObjectClass *tricore_cpu_class_by_name(const char *cpu_model)
     ObjectClass *oc;
     char *typename;
 
-    if (!cpu_model) {
-        return NULL;
-    }
-
-    typename = g_strdup_printf("%s-" TYPE_TRICORE_CPU, cpu_model);
+    typename = g_strdup_printf(TRICORE_CPU_TYPE_NAME("%s"), cpu_model);
     oc = object_class_by_name(typename);
     g_free(typename);
     if (!oc || !object_class_dynamic_cast(oc, TYPE_TRICORE_CPU) ||
@@ -155,17 +142,12 @@ static void tc27x_initfn(Object *obj)
     set_feature(&cpu->env, TRICORE_FEATURE_161);
 }
 
-typedef struct TriCoreCPUInfo {
-    const char *name;
-    void (*initfn)(Object *obj);
-    void (*class_init)(ObjectClass *oc, void *data);
-} TriCoreCPUInfo;
+#include "hw/core/tcg-cpu-ops.h"
 
-static const TriCoreCPUInfo tricore_cpus[] = {
-    { .name = "tc1796",      .initfn = tc1796_initfn },
-    { .name = "tc1797",      .initfn = tc1797_initfn },
-    { .name = "tc27x",       .initfn = tc27x_initfn },
-    { .name = NULL }
+static struct TCGCPUOps tricore_tcg_ops = {
+    .initialize = tricore_tcg_init,
+    .synchronize_from_tb = tricore_cpu_synchronize_from_tb,
+    .tlb_fill = tricore_cpu_tlb_fill,
 };
 
 static void tricore_cpu_class_init(ObjectClass *c, void *data)
@@ -174,55 +156,44 @@ static void tricore_cpu_class_init(ObjectClass *c, void *data)
     CPUClass *cc = CPU_CLASS(c);
     DeviceClass *dc = DEVICE_CLASS(c);
 
-    mcc->parent_realize = dc->realize;
-    dc->realize = tricore_cpu_realizefn;
+    device_class_set_parent_realize(dc, tricore_cpu_realizefn,
+                                    &mcc->parent_realize);
 
-    mcc->parent_reset = cc->reset;
-    cc->reset = tricore_cpu_reset;
+    device_class_set_parent_reset(dc, tricore_cpu_reset, &mcc->parent_reset);
     cc->class_by_name = tricore_cpu_class_by_name;
     cc->has_work = tricore_cpu_has_work;
 
+    cc->gdb_read_register = tricore_cpu_gdb_read_register;
+    cc->gdb_write_register = tricore_cpu_gdb_write_register;
+    cc->gdb_num_core_regs = 44;
+    cc->gdb_arch_name = tricore_gdb_arch_name;
+
     cc->dump_state = tricore_cpu_dump_state;
     cc->set_pc = tricore_cpu_set_pc;
-    cc->synchronize_from_tb = tricore_cpu_synchronize_from_tb;
-    cc->get_phys_page_attrs_debug = tricore_cpu_get_phys_page_attrs_debug;
+    cc->get_phys_page_debug = tricore_cpu_get_phys_page_debug;
+    cc->tcg_ops = &tricore_tcg_ops;
 }
 
-static void cpu_register(const TriCoreCPUInfo *info)
-{
-    TypeInfo type_info = {
-        .parent = TYPE_TRICORE_CPU,
+#define DEFINE_TRICORE_CPU_TYPE(cpu_model, initfn) \
+    {                                              \
+        .parent = TYPE_TRICORE_CPU,                \
+        .instance_init = initfn,                   \
+        .name = TRICORE_CPU_TYPE_NAME(cpu_model),  \
+    }
+
+static const TypeInfo tricore_cpu_type_infos[] = {
+    {
+        .name = TYPE_TRICORE_CPU,
+        .parent = TYPE_CPU,
         .instance_size = sizeof(TriCoreCPU),
-        .instance_init = info->initfn,
+        .instance_init = tricore_cpu_initfn,
+        .abstract = true,
         .class_size = sizeof(TriCoreCPUClass),
-        .class_init = info->class_init,
-    };
-
-    type_info.name = g_strdup_printf("%s-" TYPE_TRICORE_CPU, info->name);
-    type_register(&type_info);
-    g_free((void *)type_info.name);
-}
-
-static const TypeInfo tricore_cpu_type_info = {
-    .name = TYPE_TRICORE_CPU,
-    .parent = TYPE_CPU,
-    .instance_size = sizeof(TriCoreCPU),
-    .instance_init = tricore_cpu_initfn,
-    .abstract = true,
-    .class_size = sizeof(TriCoreCPUClass),
-    .class_init = tricore_cpu_class_init,
+        .class_init = tricore_cpu_class_init,
+    },
+    DEFINE_TRICORE_CPU_TYPE("tc1796", tc1796_initfn),
+    DEFINE_TRICORE_CPU_TYPE("tc1797", tc1797_initfn),
+    DEFINE_TRICORE_CPU_TYPE("tc27x", tc27x_initfn),
 };
 
-static void tricore_cpu_register_types(void)
-{
-    const TriCoreCPUInfo *info = tricore_cpus;
-
-    type_register_static(&tricore_cpu_type_info);
-
-    while (info->name) {
-        cpu_register(info);
-        info++;
-    }
-}
-
-type_init(tricore_cpu_register_types)
+DEFINE_TYPES(tricore_cpu_type_infos)

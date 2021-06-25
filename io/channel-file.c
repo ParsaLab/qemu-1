@@ -6,7 +6,7 @@
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2 of the License, or (at your option) any later version.
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -22,6 +22,7 @@
 #include "io/channel-file.h"
 #include "io/channel-watch.h"
 #include "qapi/error.h"
+#include "qemu/module.h"
 #include "qemu/sockets.h"
 #include "trace.h"
 
@@ -50,11 +51,7 @@ qio_channel_file_new_path(const char *path,
 
     ioc = QIO_CHANNEL_FILE(object_new(TYPE_QIO_CHANNEL_FILE));
 
-    if (flags & O_WRONLY) {
-        ioc->fd = open(path, flags, mode);
-    } else {
-        ioc->fd = open(path, flags);
-    }
+    ioc->fd = qemu_open_old(path, flags, mode);
     if (ioc->fd < 0) {
         object_unref(OBJECT(ioc));
         error_setg_errno(errp, errno,
@@ -78,7 +75,7 @@ static void qio_channel_file_finalize(Object *obj)
 {
     QIOChannelFile *ioc = QIO_CHANNEL_FILE(obj);
     if (ioc->fd != -1) {
-        close(ioc->fd);
+        qemu_close(ioc->fd);
         ioc->fd = -1;
     }
 }
@@ -177,11 +174,12 @@ static int qio_channel_file_close(QIOChannel *ioc,
 {
     QIOChannelFile *fioc = QIO_CHANNEL_FILE(ioc);
 
-    if (close(fioc->fd) < 0) {
+    if (qemu_close(fioc->fd) < 0) {
         error_setg_errno(errp, errno,
                          "Unable to close file");
         return -1;
     }
+    fioc->fd = -1;
     return 0;
 }
 

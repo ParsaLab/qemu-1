@@ -9,7 +9,6 @@
 #ifndef HW_ACPI_IPMI_H
 #define HW_ACPI_IPMI_H
 
-#include "qemu/osdep.h"
 #include "hw/acpi/aml-build.h"
 
 /*
@@ -17,6 +16,6 @@
  * bus matches the given bus.  The resource is the ACPI resource that
  * contains the IPMI device, this is required for the I2C CRS.
  */
-void build_acpi_ipmi_devices(Aml *table, BusState *bus);
+void build_acpi_ipmi_devices(Aml *table, BusState *bus, const char *resource);
 
 #endif /* HW_ACPI_IPMI_H */

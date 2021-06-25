@@ -1,15 +1,23 @@
 /* from asm/termbits.h */
 
+#ifndef LINUX_USER_SPARC_TERMBITS_H
+#define LINUX_USER_SPARC_TERMBITS_H
+
 #define TARGET_NCCS 19
 
+typedef unsigned char   target_cc_t;        /* cc_t */
+typedef unsigned int    target_speed_t;     /* speed_t */
+typedef unsigned int    target_tcflag_t;    /* tcflag_t */
+
 struct target_termios {
-    unsigned int c_iflag;               /* input mode flags */
-    unsigned int c_oflag;               /* output mode flags */
-    unsigned int c_cflag;               /* control mode flags */
-    unsigned int c_lflag;               /* local mode flags */
-    unsigned char c_line;                    /* line discipline */
-    unsigned char c_cc[TARGET_NCCS];                /* control characters */
+    target_tcflag_t c_iflag;               /* input mode flags */
+    target_tcflag_t c_oflag;               /* output mode flags */
+    target_tcflag_t c_cflag;               /* control mode flags */
+    target_tcflag_t c_lflag;               /* local mode flags */
+    target_cc_t c_line;                    /* line discipline */
+    target_cc_t c_cc[TARGET_NCCS];         /* control characters */
 };
+
 
 /* c_cc characters */
 #define TARGET_VINTR    0
@@ -167,6 +175,7 @@ struct target_termios {
 #define TARGET_FLUSHO	0x00002000
 #define TARGET_PENDIN	0x00004000
 #define TARGET_IEXTEN	0x00008000
+#define TARGET_EXTPROC  0x00010000
 
 /* ioctls */
 
@@ -245,6 +254,7 @@ struct target_termios {
 /* Get minor device of a pty master's FD -- Solaris equiv is ISPTM */
 #define TARGET_TIOCGPTN	TARGET_IOR('t', 134, unsigned int) /* Get Pty Number */
 #define TARGET_TIOCSPTLCK	TARGET_IOW('t', 135, int) /* Lock/unlock PTY */
+#define TARGET_TIOCGPTPEER      TARGET_IO('t', 137) /* Safely open the slave */
 
 /* Little f */
 #define TARGET_FIOCLEX		TARGET_IO('f', 1)
@@ -277,3 +287,5 @@ struct target_termios {
 #define TARGET_TIOCSERSETMULTI 0x545B /* Set multiport config */
 #define TARGET_TIOCMIWAIT	0x545C /* Wait input */
 #define TARGET_TIOCGICOUNT	0x545D /* Read serial port inline interrupt counts */
+
+#endif

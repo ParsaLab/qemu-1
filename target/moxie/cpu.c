@@ -13,17 +13,15 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * Lesser General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
+ * You should have received a copy of the GNU Lesser General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include "qemu/osdep.h"
 #include "qapi/error.h"
 #include "cpu.h"
-#include "qemu-common.h"
 #include "migration/vmstate.h"
 #include "machine.h"
-#include "exec/exec-all.h"
 
 static void moxie_cpu_set_pc(CPUState *cs, vaddr value)
 {
@@ -37,13 +35,14 @@ static bool moxie_cpu_has_work(CPUState *cs)
     return cs->interrupt_request & CPU_INTERRUPT_HARD;
 }
 
-static void moxie_cpu_reset(CPUState *s)
+static void moxie_cpu_reset(DeviceState *dev)
 {
+    CPUState *s = CPU(dev);
     MoxieCPU *cpu = MOXIE_CPU(s);
     MoxieCPUClass *mcc = MOXIE_CPU_GET_CLASS(cpu);
     CPUMoxieState *env = &cpu->env;
 
-    mcc->parent_reset(s);
+    mcc->parent_reset(dev);
 
     memset(env, 0, offsetof(CPUMoxieState, end_reset_fields));
     env->pc = 0x1000;
@@ -75,27 +74,19 @@ static void moxie_cpu_realizefn(DeviceState *dev, Error **errp)
 
 static void moxie_cpu_initfn(Object *obj)
 {
-    CPUState *cs = CPU(obj);
     MoxieCPU *cpu = MOXIE_CPU(obj);
-    static int inited;
 
-    cs->env_ptr = &cpu->env;
-
-    if (tcg_enabled() && !inited) {
-        inited = 1;
-        moxie_translate_init();
-    }
+    cpu_set_cpustate_pointers(cpu);
 }
 
 static ObjectClass *moxie_cpu_class_by_name(const char *cpu_model)
 {
     ObjectClass *oc;
+    char *typename;
 
-    if (cpu_model == NULL) {
-        return NULL;
-    }
-
-    oc = object_class_by_name(cpu_model);
+    typename = g_strdup_printf(MOXIE_CPU_TYPE_NAME("%s"), cpu_model);
+    oc = object_class_by_name(typename);
+    g_free(typename);
     if (oc != NULL && (!object_class_dynamic_cast(oc, TYPE_MOXIE_CPU) ||
                        object_class_is_abstract(oc))) {
         return NULL;
@@ -103,31 +94,38 @@ static ObjectClass *moxie_cpu_class_by_name(const char *cpu_model)
     return oc;
 }
 
+#include "hw/core/tcg-cpu-ops.h"
+
+static struct TCGCPUOps moxie_tcg_ops = {
+    .initialize = moxie_translate_init,
+    .tlb_fill = moxie_cpu_tlb_fill,
+
+#ifndef CONFIG_USER_ONLY
+    .do_interrupt = moxie_cpu_do_interrupt,
+#endif /* !CONFIG_USER_ONLY */
+};
+
 static void moxie_cpu_class_init(ObjectClass *oc, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(oc);
     CPUClass *cc = CPU_CLASS(oc);
     MoxieCPUClass *mcc = MOXIE_CPU_CLASS(oc);
 
-    mcc->parent_realize = dc->realize;
-    dc->realize = moxie_cpu_realizefn;
-
-    mcc->parent_reset = cc->reset;
-    cc->reset = moxie_cpu_reset;
+    device_class_set_parent_realize(dc, moxie_cpu_realizefn,
+                                    &mcc->parent_realize);
+    device_class_set_parent_reset(dc, moxie_cpu_reset, &mcc->parent_reset);
 
     cc->class_by_name = moxie_cpu_class_by_name;
 
     cc->has_work = moxie_cpu_has_work;
-    cc->do_interrupt = moxie_cpu_do_interrupt;
     cc->dump_state = moxie_cpu_dump_state;
     cc->set_pc = moxie_cpu_set_pc;
-#ifdef CONFIG_USER_ONLY
-    cc->handle_mmu_fault = moxie_cpu_handle_mmu_fault;
-#else
+#ifndef CONFIG_USER_ONLY
     cc->get_phys_page_debug = moxie_cpu_get_phys_page_debug;
     cc->vmsd = &vmstate_moxie_cpu;
 #endif
     cc->disas_set_info = moxie_cpu_disas_set_info;
+    cc->tcg_ops = &moxie_tcg_ops;
 }
 
 static void moxielite_initfn(Object *obj)
@@ -140,46 +138,24 @@ static void moxie_any_initfn(Object *obj)
     /* Set cpu feature flags */
 }
 
-typedef struct MoxieCPUInfo {
-    const char *name;
-    void (*initfn)(Object *obj);
-} MoxieCPUInfo;
-
-static const MoxieCPUInfo moxie_cpus[] = {
-    { .name = "MoxieLite",      .initfn = moxielite_initfn },
-    { .name = "any",            .initfn = moxie_any_initfn },
-};
-
-static void cpu_register(const MoxieCPUInfo *info)
-{
-    TypeInfo type_info = {
-        .parent = TYPE_MOXIE_CPU,
-        .instance_size = sizeof(MoxieCPU),
-        .instance_init = info->initfn,
-        .class_size = sizeof(MoxieCPUClass),
-    };
-
-    type_info.name = g_strdup_printf("%s-" TYPE_MOXIE_CPU, info->name);
-    type_register(&type_info);
-    g_free((void *)type_info.name);
-}
-
-static const TypeInfo moxie_cpu_type_info = {
-    .name = TYPE_MOXIE_CPU,
-    .parent = TYPE_CPU,
-    .instance_size = sizeof(MoxieCPU),
-    .instance_init = moxie_cpu_initfn,
-    .class_size = sizeof(MoxieCPUClass),
-    .class_init = moxie_cpu_class_init,
-};
-
-static void moxie_cpu_register_types(void)
-{
-    int i;
-    type_register_static(&moxie_cpu_type_info);
-    for (i = 0; i < ARRAY_SIZE(moxie_cpus); i++) {
-        cpu_register(&moxie_cpus[i]);
+#define DEFINE_MOXIE_CPU_TYPE(cpu_model, initfn) \
+    {                                            \
+        .parent = TYPE_MOXIE_CPU,                \
+        .instance_init = initfn,                 \
+        .name = MOXIE_CPU_TYPE_NAME(cpu_model),  \
     }
-}
 
-type_init(moxie_cpu_register_types)
+static const TypeInfo moxie_cpus_type_infos[] = {
+    { /* base class should be registered first */
+        .name = TYPE_MOXIE_CPU,
+        .parent = TYPE_CPU,
+        .instance_size = sizeof(MoxieCPU),
+        .instance_init = moxie_cpu_initfn,
+        .class_size = sizeof(MoxieCPUClass),
+        .class_init = moxie_cpu_class_init,
+    },
+    DEFINE_MOXIE_CPU_TYPE("MoxieLite", moxielite_initfn),
+    DEFINE_MOXIE_CPU_TYPE("any", moxie_any_initfn),
+};
+
+DEFINE_TYPES(moxie_cpus_type_infos)

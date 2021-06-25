@@ -737,7 +737,7 @@ static void padzero(abi_ulong elf_bss, abi_ulong last_bss)
             end_addr1 = REAL_HOST_PAGE_ALIGN(elf_bss);
             end_addr = HOST_PAGE_ALIGN(elf_bss);
             if (end_addr1 < end_addr) {
-                mmap((void *)g2h(end_addr1), end_addr - end_addr1,
+                mmap((void *)g2h_untagged(end_addr1), end_addr - end_addr1,
                      PROT_READ|PROT_WRITE|PROT_EXEC,
                      MAP_FIXED|MAP_PRIVATE|MAP_ANON, -1, 0);
             }
@@ -1367,7 +1367,7 @@ int load_elf_binary(struct linux_binprm * bprm, struct target_pt_regs * regs,
     if (!have_guest_base) {
         /*
          * Go through ELF program header table and find out whether
-	 * any of the segments drop below our current mmap_min_addr and
+         * any of the segments drop below our current mmap_min_addr and
          * in that case set guest_base to corresponding address.
          */
         for (i = 0, elf_ppnt = elf_phdata; i < elf_ex.e_phnum;

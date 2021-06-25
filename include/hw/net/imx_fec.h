@@ -23,9 +23,10 @@
 
 #ifndef IMX_FEC_H
 #define IMX_FEC_H
+#include "qom/object.h"
 
 #define TYPE_IMX_FEC "imx.fec"
-#define IMX_FEC(obj) OBJECT_CHECK(IMXFECState, (obj), TYPE_IMX_FEC)
+OBJECT_DECLARE_SIMPLE_TYPE(IMXFECState, IMX_FEC)
 
 #define TYPE_IMX_ENET "imx.enet"
 
@@ -52,6 +53,8 @@
 #define ENET_TFWR              81
 #define ENET_FRBR              83
 #define ENET_FRSR              84
+#define ENET_TDSR1             89
+#define ENET_TDSR2             92
 #define ENET_RDSR              96
 #define ENET_TDSR              97
 #define ENET_MRBR              98
@@ -66,6 +69,8 @@
 #define ENET_FTRL              108
 #define ENET_TACC              112
 #define ENET_RACC              113
+#define ENET_TDAR1             121
+#define ENET_TDAR2             123
 #define ENET_MIIGSK_CFGR       192
 #define ENET_MIIGSK_ENR        194
 #define ENET_ATCR              256
@@ -86,7 +91,6 @@
 #define ENET_TCCR3             393
 #define ENET_MAX               400
 
-#define ENET_MAX_FRAME_SIZE    2032
 
 /* EIR and EIMR */
 #define ENET_INT_HB            (1 << 31)
@@ -106,13 +110,18 @@
 #define ENET_INT_WAKEUP        (1 << 17)
 #define ENET_INT_TS_AVAIL      (1 << 16)
 #define ENET_INT_TS_TIMER      (1 << 15)
+#define ENET_INT_TXF2          (1 <<  7)
+#define ENET_INT_TXB2          (1 <<  6)
+#define ENET_INT_TXF1          (1 <<  3)
+#define ENET_INT_TXB1          (1 <<  2)
 
 #define ENET_INT_MAC           (ENET_INT_HB | ENET_INT_BABR | ENET_INT_BABT | \
                                 ENET_INT_GRA | ENET_INT_TXF | ENET_INT_TXB | \
                                 ENET_INT_RXF | ENET_INT_RXB | ENET_INT_MII | \
                                 ENET_INT_EBERR | ENET_INT_LC | ENET_INT_RL | \
                                 ENET_INT_UN | ENET_INT_PLR | ENET_INT_WAKEUP | \
-                                ENET_INT_TS_AVAIL)
+                                ENET_INT_TS_AVAIL | ENET_INT_TXF1 | \
+                                ENET_INT_TXB1 | ENET_INT_TXF2 | ENET_INT_TXB2)
 
 /* RDAR */
 #define ENET_RDAR_RDAR         (1 << 24)
@@ -155,6 +164,8 @@
 #define ENET_RCR_NLC           (1 << 30)
 #define ENET_RCR_GRS           (1 << 31)
 
+#define ENET_MAX_FRAME_SIZE    (1 << ENET_RCR_MAX_FL_LENGTH)
+
 /* TCR */
 #define ENET_TCR_GTS           (1 << 0)
 #define ENET_TCR_FDEN          (1 << 2)
@@ -168,6 +179,8 @@
 #define ENET_TWFR_TFWR_SHIFT   (0)
 #define ENET_TWFR_TFWR_LENGTH  (6)
 #define ENET_TWFR_STRFWD       (1 << 8)
+
+#define ENET_RACC_SHIFT16      BIT(7)
 
 /* Buffer Descriptor.  */
 typedef struct {
@@ -231,7 +244,11 @@ typedef struct {
 
 #define ENET_BD_BDU            (1 << 31)
 
-typedef struct IMXFECState {
+#define ENET_TX_RING_NUM       3
+
+#define FSL_IMX25_FEC_SIZE      0x4000
+
+struct IMXFECState {
     /*< private >*/
     SysBusDevice parent_obj;
 
@@ -243,15 +260,21 @@ typedef struct IMXFECState {
 
     uint32_t regs[ENET_MAX];
     uint32_t rx_descriptor;
-    uint32_t tx_descriptor;
+
+    uint32_t tx_descriptor[ENET_TX_RING_NUM];
+    uint32_t tx_ring_num;
 
     uint32_t phy_status;
     uint32_t phy_control;
     uint32_t phy_advertise;
     uint32_t phy_int;
     uint32_t phy_int_mask;
+    uint32_t phy_num;
 
     bool is_fec;
-} IMXFECState;
+
+    /* Buffer used to assemble a Tx frame */
+    uint8_t frame[ENET_MAX_FRAME_SIZE];
+};
 
 #endif

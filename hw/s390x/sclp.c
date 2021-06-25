@@ -13,11 +13,10 @@
  */
 
 #include "qemu/osdep.h"
+#include "qemu/units.h"
 #include "qapi/error.h"
 #include "cpu.h"
-#include "exec/memory.h"
 #include "sysemu/sysemu.h"
-#include "exec/address-spaces.h"
 #include "hw/boards.h"
 #include "hw/s390x/sclp.h"
 #include "hw/s390x/event-facility.h"
@@ -34,9 +33,53 @@ static inline SCLPDevice *get_sclp_device(void)
     return sclp;
 }
 
-static void prepare_cpu_entries(SCLPDevice *sclp, CPUEntry *entry, int *count)
+static inline bool sclp_command_code_valid(uint32_t code)
 {
-    MachineState *ms = MACHINE(qdev_get_machine());
+    switch (code & SCLP_CMD_CODE_MASK) {
+    case SCLP_CMDW_READ_SCP_INFO:
+    case SCLP_CMDW_READ_SCP_INFO_FORCED:
+    case SCLP_CMDW_READ_CPU_INFO:
+    case SCLP_CMDW_CONFIGURE_IOA:
+    case SCLP_CMDW_DECONFIGURE_IOA:
+    case SCLP_CMD_READ_EVENT_DATA:
+    case SCLP_CMD_WRITE_EVENT_DATA:
+    case SCLP_CMD_WRITE_EVENT_MASK:
+        return true;
+    }
+    return false;
+}
+
+static bool sccb_verify_boundary(uint64_t sccb_addr, uint16_t sccb_len,
+                                 uint32_t code)
+{
+    uint64_t sccb_max_addr = sccb_addr + sccb_len - 1;
+    uint64_t sccb_boundary = (sccb_addr & PAGE_MASK) + PAGE_SIZE;
+
+    switch (code & SCLP_CMD_CODE_MASK) {
+    case SCLP_CMDW_READ_SCP_INFO:
+    case SCLP_CMDW_READ_SCP_INFO_FORCED:
+    case SCLP_CMDW_READ_CPU_INFO:
+        /*
+         * An extended-length SCCB is only allowed for Read SCP/CPU Info and
+         * is allowed to exceed the 4k boundary. The respective commands will
+         * set the length field to the required length if an insufficient
+         * SCCB length is provided.
+         */
+        if (s390_has_feat(S390_FEAT_EXTENDED_LENGTH_SCCB)) {
+            return true;
+        }
+        /* fallthrough */
+    default:
+        if (sccb_max_addr < sccb_boundary) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static void prepare_cpu_entries(MachineState *ms, CPUEntry *entry, int *count)
+{
     uint8_t features[SCCB_CPU_FEATURE_LEN] = { 0 };
     int i;
 
@@ -52,22 +95,41 @@ static void prepare_cpu_entries(SCLPDevice *sclp, CPUEntry *entry, int *count)
     }
 }
 
+#define SCCB_REQ_LEN(s, max_cpus) (sizeof(s) + max_cpus * sizeof(CPUEntry))
+
+static inline bool ext_len_sccb_supported(SCCBHeader header)
+{
+    return s390_has_feat(S390_FEAT_EXTENDED_LENGTH_SCCB) &&
+           header.control_mask[2] & SCLP_VARIABLE_LENGTH_RESPONSE;
+}
+
 /* Provide information about the configuration, CPUs and storage */
 static void read_SCP_info(SCLPDevice *sclp, SCCB *sccb)
 {
     ReadInfo *read_info = (ReadInfo *) sccb;
     MachineState *machine = MACHINE(qdev_get_machine());
-    sclpMemoryHotplugDev *mhd = get_sclp_memory_hotplug_dev();
     int cpu_count;
     int rnsize, rnmax;
-    int slots = MIN(machine->ram_slots, s390_get_memslot_count());
     IplParameterBlock *ipib = s390_ipl_get_iplb();
+    int required_len = SCCB_REQ_LEN(ReadInfo, machine->possible_cpus->len);
+    int offset_cpu = s390_has_feat(S390_FEAT_EXTENDED_LENGTH_SCCB) ?
+                     offsetof(ReadInfo, entries) :
+                     SCLP_READ_SCP_INFO_FIXED_CPU_OFFSET;
+    CPUEntry *entries_start = (void *)sccb + offset_cpu;
+
+    if (be16_to_cpu(sccb->h.length) < required_len) {
+        if (ext_len_sccb_supported(sccb->h)) {
+            sccb->h.length = cpu_to_be16(required_len);
+        }
+        sccb->h.response_code = cpu_to_be16(SCLP_RC_INSUFFICIENT_SCCB_LENGTH);
+        return;
+    }
 
     /* CPU information */
-    prepare_cpu_entries(sclp, read_info->entries, &cpu_count);
+    prepare_cpu_entries(machine, entries_start, &cpu_count);
     read_info->entries_cpu = cpu_to_be16(cpu_count);
-    read_info->offset_cpu = cpu_to_be16(offsetof(ReadInfo, entries));
-    read_info->highest_cpu = cpu_to_be16(max_cpus);
+    read_info->offset_cpu = cpu_to_be16(offset_cpu);
+    read_info->highest_cpu = cpu_to_be16(machine->smp.max_cpus - 1);
 
     read_info->ibc_val = cpu_to_be32(s390_get_ibc_val());
 
@@ -77,39 +139,14 @@ static void read_SCP_info(SCLPDevice *sclp, SCCB *sccb)
     s390_get_feat_block(S390_FEAT_TYPE_SCLP_CONF_CHAR_EXT,
                          read_info->conf_char_ext);
 
+    if (s390_has_feat(S390_FEAT_EXTENDED_LENGTH_SCCB)) {
+        s390_get_feat_block(S390_FEAT_TYPE_SCLP_FAC134,
+                            &read_info->fac134);
+    }
+
     read_info->facilities = cpu_to_be64(SCLP_HAS_CPU_INFO |
                                         SCLP_HAS_IOA_RECONFIG);
 
-    /* Memory Hotplug is only supported for the ccw machine type */
-    if (mhd) {
-        mhd->standby_subregion_size = MEM_SECTION_SIZE;
-        /* Deduct the memory slot already used for core */
-        if (slots > 0) {
-            while ((mhd->standby_subregion_size * (slots - 1)
-                    < mhd->standby_mem_size)) {
-                mhd->standby_subregion_size = mhd->standby_subregion_size << 1;
-            }
-        }
-        /*
-         * Initialize mapping of guest standby memory sections indicating which
-         * are and are not online. Assume all standby memory begins offline.
-         */
-        if (mhd->standby_state_map == 0) {
-            if (mhd->standby_mem_size % mhd->standby_subregion_size) {
-                mhd->standby_state_map = g_malloc0((mhd->standby_mem_size /
-                                             mhd->standby_subregion_size + 1) *
-                                             (mhd->standby_subregion_size /
-                                             MEM_SECTION_SIZE));
-            } else {
-                mhd->standby_state_map = g_malloc0(mhd->standby_mem_size /
-                                                   MEM_SECTION_SIZE);
-            }
-        }
-        mhd->padded_ram_size = ram_size + mhd->pad_size;
-        mhd->rzm = 1 << mhd->increment_size;
-
-        read_info->facilities |= cpu_to_be64(SCLP_FC_ASSIGN_ATTACH_READ_STOR);
-    }
     read_info->mha_pow = s390_get_mha_pow();
     read_info->hmfai = cpu_to_be32(s390_get_hmfai());
 
@@ -121,7 +158,8 @@ static void read_SCP_info(SCLPDevice *sclp, SCCB *sccb)
         read_info->rnsize2 = cpu_to_be32(rnsize);
     }
 
-    rnmax = machine->maxram_size >> sclp->increment_size;
+    /* we don't support standby memory, maxram_size is never exposed */
+    rnmax = machine->ram_size >> sclp->increment_size;
     if (rnmax < 0x10000) {
         read_info->rnmax = cpu_to_be16(rnmax);
     } else {
@@ -139,202 +177,23 @@ static void read_SCP_info(SCLPDevice *sclp, SCCB *sccb)
     sccb->h.response_code = cpu_to_be16(SCLP_RC_NORMAL_READ_COMPLETION);
 }
 
-static void read_storage_element0_info(SCLPDevice *sclp, SCCB *sccb)
-{
-    int i, assigned;
-    int subincrement_id = SCLP_STARTING_SUBINCREMENT_ID;
-    ReadStorageElementInfo *storage_info = (ReadStorageElementInfo *) sccb;
-    sclpMemoryHotplugDev *mhd = get_sclp_memory_hotplug_dev();
-
-    if (!mhd) {
-        sccb->h.response_code = cpu_to_be16(SCLP_RC_INVALID_SCLP_COMMAND);
-        return;
-    }
-
-    if ((ram_size >> mhd->increment_size) >= 0x10000) {
-        sccb->h.response_code = cpu_to_be16(SCLP_RC_SCCB_BOUNDARY_VIOLATION);
-        return;
-    }
-
-    /* Return information regarding core memory */
-    storage_info->max_id = cpu_to_be16(mhd->standby_mem_size ? 1 : 0);
-    assigned = ram_size >> mhd->increment_size;
-    storage_info->assigned = cpu_to_be16(assigned);
-
-    for (i = 0; i < assigned; i++) {
-        storage_info->entries[i] = cpu_to_be32(subincrement_id);
-        subincrement_id += SCLP_INCREMENT_UNIT;
-    }
-    sccb->h.response_code = cpu_to_be16(SCLP_RC_NORMAL_READ_COMPLETION);
-}
-
-static void read_storage_element1_info(SCLPDevice *sclp, SCCB *sccb)
-{
-    ReadStorageElementInfo *storage_info = (ReadStorageElementInfo *) sccb;
-    sclpMemoryHotplugDev *mhd = get_sclp_memory_hotplug_dev();
-
-    if (!mhd) {
-        sccb->h.response_code = cpu_to_be16(SCLP_RC_INVALID_SCLP_COMMAND);
-        return;
-    }
-
-    if ((mhd->standby_mem_size >> mhd->increment_size) >= 0x10000) {
-        sccb->h.response_code = cpu_to_be16(SCLP_RC_SCCB_BOUNDARY_VIOLATION);
-        return;
-    }
-
-    /* Return information regarding standby memory */
-    storage_info->max_id = cpu_to_be16(mhd->standby_mem_size ? 1 : 0);
-    storage_info->assigned = cpu_to_be16(mhd->standby_mem_size >>
-                                         mhd->increment_size);
-    storage_info->standby = cpu_to_be16(mhd->standby_mem_size >>
-                                        mhd->increment_size);
-    sccb->h.response_code = cpu_to_be16(SCLP_RC_STANDBY_READ_COMPLETION);
-}
-
-static void attach_storage_element(SCLPDevice *sclp, SCCB *sccb,
-                                   uint16_t element)
-{
-    int i, assigned, subincrement_id;
-    AttachStorageElement *attach_info = (AttachStorageElement *) sccb;
-    sclpMemoryHotplugDev *mhd = get_sclp_memory_hotplug_dev();
-
-    if (!mhd) {
-        sccb->h.response_code = cpu_to_be16(SCLP_RC_INVALID_SCLP_COMMAND);
-        return;
-    }
-
-    if (element != 1) {
-        sccb->h.response_code = cpu_to_be16(SCLP_RC_INVALID_SCLP_COMMAND);
-        return;
-    }
-
-    assigned = mhd->standby_mem_size >> mhd->increment_size;
-    attach_info->assigned = cpu_to_be16(assigned);
-    subincrement_id = ((ram_size >> mhd->increment_size) << 16)
-                      + SCLP_STARTING_SUBINCREMENT_ID;
-    for (i = 0; i < assigned; i++) {
-        attach_info->entries[i] = cpu_to_be32(subincrement_id);
-        subincrement_id += SCLP_INCREMENT_UNIT;
-    }
-    sccb->h.response_code = cpu_to_be16(SCLP_RC_NORMAL_COMPLETION);
-}
-
-static void assign_storage(SCLPDevice *sclp, SCCB *sccb)
-{
-    MemoryRegion *mr = NULL;
-    uint64_t this_subregion_size;
-    AssignStorage *assign_info = (AssignStorage *) sccb;
-    sclpMemoryHotplugDev *mhd = get_sclp_memory_hotplug_dev();
-    ram_addr_t assign_addr;
-    MemoryRegion *sysmem = get_system_memory();
-
-    if (!mhd) {
-        sccb->h.response_code = cpu_to_be16(SCLP_RC_INVALID_SCLP_COMMAND);
-        return;
-    }
-    assign_addr = (assign_info->rn - 1) * mhd->rzm;
-
-    if ((assign_addr % MEM_SECTION_SIZE == 0) &&
-        (assign_addr >= mhd->padded_ram_size)) {
-        /* Re-use existing memory region if found */
-        mr = memory_region_find(sysmem, assign_addr, 1).mr;
-        memory_region_unref(mr);
-        if (!mr) {
-
-            MemoryRegion *standby_ram = g_new(MemoryRegion, 1);
-
-            /* offset to align to standby_subregion_size for allocation */
-            ram_addr_t offset = assign_addr -
-                                (assign_addr - mhd->padded_ram_size)
-                                % mhd->standby_subregion_size;
-
-            /* strlen("standby.ram") + 4 (Max of KVM_MEMORY_SLOTS) +  NULL */
-            char id[16];
-            snprintf(id, 16, "standby.ram%d",
-                     (int)((offset - mhd->padded_ram_size) /
-                     mhd->standby_subregion_size) + 1);
-
-            /* Allocate a subregion of the calculated standby_subregion_size */
-            if (offset + mhd->standby_subregion_size >
-                mhd->padded_ram_size + mhd->standby_mem_size) {
-                this_subregion_size = mhd->padded_ram_size +
-                  mhd->standby_mem_size - offset;
-            } else {
-                this_subregion_size = mhd->standby_subregion_size;
-            }
-
-            memory_region_init_ram(standby_ram, NULL, id, this_subregion_size,
-                                   &error_fatal);
-            /* This is a hack to make memory hotunplug work again. Once we have
-             * subdevices, we have to unparent them when unassigning memory,
-             * instead of doing it via the ref count of the MemoryRegion. */
-            object_ref(OBJECT(standby_ram));
-            object_unparent(OBJECT(standby_ram));
-            memory_region_add_subregion(sysmem, offset, standby_ram);
-        }
-        /* The specified subregion is no longer in standby */
-        mhd->standby_state_map[(assign_addr - mhd->padded_ram_size)
-                               / MEM_SECTION_SIZE] = 1;
-    }
-    sccb->h.response_code = cpu_to_be16(SCLP_RC_NORMAL_COMPLETION);
-}
-
-static void unassign_storage(SCLPDevice *sclp, SCCB *sccb)
-{
-    MemoryRegion *mr = NULL;
-    AssignStorage *assign_info = (AssignStorage *) sccb;
-    sclpMemoryHotplugDev *mhd = get_sclp_memory_hotplug_dev();
-    ram_addr_t unassign_addr;
-    MemoryRegion *sysmem = get_system_memory();
-
-    if (!mhd) {
-        sccb->h.response_code = cpu_to_be16(SCLP_RC_INVALID_SCLP_COMMAND);
-        return;
-    }
-    unassign_addr = (assign_info->rn - 1) * mhd->rzm;
-
-    /* if the addr is a multiple of 256 MB */
-    if ((unassign_addr % MEM_SECTION_SIZE == 0) &&
-        (unassign_addr >= mhd->padded_ram_size)) {
-        mhd->standby_state_map[(unassign_addr -
-                           mhd->padded_ram_size) / MEM_SECTION_SIZE] = 0;
-
-        /* find the specified memory region and destroy it */
-        mr = memory_region_find(sysmem, unassign_addr, 1).mr;
-        memory_region_unref(mr);
-        if (mr) {
-            int i;
-            int is_removable = 1;
-            ram_addr_t map_offset = (unassign_addr - mhd->padded_ram_size -
-                                     (unassign_addr - mhd->padded_ram_size)
-                                     % mhd->standby_subregion_size);
-            /* Mark all affected subregions as 'standby' once again */
-            for (i = 0;
-                 i < (mhd->standby_subregion_size / MEM_SECTION_SIZE);
-                 i++) {
-
-                if (mhd->standby_state_map[i + map_offset / MEM_SECTION_SIZE]) {
-                    is_removable = 0;
-                    break;
-                }
-            }
-            if (is_removable) {
-                memory_region_del_subregion(sysmem, mr);
-                object_unref(OBJECT(mr));
-            }
-        }
-    }
-    sccb->h.response_code = cpu_to_be16(SCLP_RC_NORMAL_COMPLETION);
-}
-
 /* Provide information about the CPU */
 static void sclp_read_cpu_info(SCLPDevice *sclp, SCCB *sccb)
 {
+    MachineState *machine = MACHINE(qdev_get_machine());
     ReadCpuInfo *cpu_info = (ReadCpuInfo *) sccb;
     int cpu_count;
+    int required_len = SCCB_REQ_LEN(ReadCpuInfo, machine->possible_cpus->len);
 
-    prepare_cpu_entries(sclp, cpu_info->entries, &cpu_count);
+    if (be16_to_cpu(sccb->h.length) < required_len) {
+        if (ext_len_sccb_supported(sccb->h)) {
+            sccb->h.length = cpu_to_be16(required_len);
+        }
+        sccb->h.response_code = cpu_to_be16(SCLP_RC_INSUFFICIENT_SCCB_LENGTH);
+        return;
+    }
+
+    prepare_cpu_entries(machine, cpu_info->entries, &cpu_count);
     cpu_info->nr_configured = cpu_to_be16(cpu_count);
     cpu_info->offset_configured = cpu_to_be16(offsetof(ReadCpuInfo, entries));
     cpu_info->nr_standby = cpu_to_be16(0);
@@ -390,22 +249,6 @@ static void sclp_execute(SCLPDevice *sclp, SCCB *sccb, uint32_t code)
     case SCLP_CMDW_READ_CPU_INFO:
         sclp_c->read_cpu_info(sclp, sccb);
         break;
-    case SCLP_READ_STORAGE_ELEMENT_INFO:
-        if (code & 0xff00) {
-            sclp_c->read_storage_element1_info(sclp, sccb);
-        } else {
-            sclp_c->read_storage_element0_info(sclp, sccb);
-        }
-        break;
-    case SCLP_ATTACH_STORAGE_ELEMENT:
-        sclp_c->attach_storage_element(sclp, sccb, (code & 0xff00) >> 8);
-        break;
-    case SCLP_ASSIGN_STORAGE:
-        sclp_c->assign_storage(sclp, sccb);
-        break;
-    case SCLP_UNASSIGN_STORAGE:
-        sclp_c->unassign_storage(sclp, sccb);
-        break;
     case SCLP_CMDW_CONFIGURE_IOA:
         sclp_configure_io_adapter(sclp, sccb, true);
         break;
@@ -418,28 +261,63 @@ static void sclp_execute(SCLPDevice *sclp, SCCB *sccb, uint32_t code)
     }
 }
 
+/*
+ * We only need the address to have something valid for the
+ * service_interrupt call.
+ */
+#define SCLP_PV_DUMMY_ADDR 0x4000
+int sclp_service_call_protected(CPUS390XState *env, uint64_t sccb,
+                                uint32_t code)
+{
+    SCLPDevice *sclp = get_sclp_device();
+    SCLPDeviceClass *sclp_c = SCLP_GET_CLASS(sclp);
+    SCCBHeader header;
+    g_autofree SCCB *work_sccb = NULL;
+
+    s390_cpu_pv_mem_read(env_archcpu(env), 0, &header, sizeof(SCCBHeader));
+
+    work_sccb = g_malloc0(be16_to_cpu(header.length));
+    s390_cpu_pv_mem_read(env_archcpu(env), 0, work_sccb,
+                         be16_to_cpu(header.length));
+
+    if (!sclp_command_code_valid(code)) {
+        work_sccb->h.response_code = cpu_to_be16(SCLP_RC_INVALID_SCLP_COMMAND);
+        goto out_write;
+    }
+
+    sclp_c->execute(sclp, work_sccb, code);
+out_write:
+    s390_cpu_pv_mem_write(env_archcpu(env), 0, work_sccb,
+                          be16_to_cpu(work_sccb->h.length));
+    sclp_c->service_interrupt(sclp, SCLP_PV_DUMMY_ADDR);
+    return 0;
+}
+
 int sclp_service_call(CPUS390XState *env, uint64_t sccb, uint32_t code)
 {
     SCLPDevice *sclp = get_sclp_device();
     SCLPDeviceClass *sclp_c = SCLP_GET_CLASS(sclp);
-    int r = 0;
-    SCCB work_sccb;
-
-    hwaddr sccb_len = sizeof(SCCB);
+    SCCBHeader header;
+    g_autofree SCCB *work_sccb = NULL;
 
     /* first some basic checks on program checks */
     if (env->psw.mask & PSW_MASK_PSTATE) {
-        r = -PGM_PRIVILEGED;
-        goto out;
+        return -PGM_PRIVILEGED;
     }
     if (cpu_physical_memory_is_io(sccb)) {
-        r = -PGM_ADDRESSING;
-        goto out;
+        return -PGM_ADDRESSING;
     }
     if ((sccb & ~0x1fffUL) == 0 || (sccb & ~0x1fffUL) == env->psa
         || (sccb & ~0x7ffffff8UL) != 0) {
-        r = -PGM_SPECIFICATION;
-        goto out;
+        return -PGM_SPECIFICATION;
+    }
+
+    /* the header contains the actual length of the sccb */
+    cpu_physical_memory_read(sccb, &header, sizeof(SCCBHeader));
+
+    /* Valid sccb sizes */
+    if (be16_to_cpu(header.length) < sizeof(SCCBHeader)) {
+        return -PGM_SPECIFICATION;
     }
 
     /*
@@ -447,24 +325,27 @@ int sclp_service_call(CPUS390XState *env, uint64_t sccb, uint32_t code)
      * from playing dirty tricks by modifying the memory content after
      * the host has checked the values
      */
-    cpu_physical_memory_read(sccb, &work_sccb, sccb_len);
+    work_sccb = g_malloc0(be16_to_cpu(header.length));
+    cpu_physical_memory_read(sccb, work_sccb, be16_to_cpu(header.length));
 
-    /* Valid sccb sizes */
-    if (be16_to_cpu(work_sccb.h.length) < sizeof(SCCBHeader) ||
-        be16_to_cpu(work_sccb.h.length) > SCCB_SIZE) {
-        r = -PGM_SPECIFICATION;
-        goto out;
+    if (!sclp_command_code_valid(code)) {
+        work_sccb->h.response_code = cpu_to_be16(SCLP_RC_INVALID_SCLP_COMMAND);
+        goto out_write;
     }
 
-    sclp_c->execute(sclp, &work_sccb, code);
+    if (!sccb_verify_boundary(sccb, be16_to_cpu(work_sccb->h.length), code)) {
+        work_sccb->h.response_code = cpu_to_be16(SCLP_RC_SCCB_BOUNDARY_VIOLATION);
+        goto out_write;
+    }
 
-    cpu_physical_memory_write(sccb, &work_sccb,
-                              be16_to_cpu(work_sccb.h.length));
+    sclp_c->execute(sclp, work_sccb, code);
+out_write:
+    cpu_physical_memory_write(sccb, work_sccb,
+                              be16_to_cpu(work_sccb->h.length));
 
     sclp_c->service_interrupt(sclp, sccb);
 
-out:
-    return r;
+    return 0;
 }
 
 static void service_interrupt(SCLPDevice *sclp, uint32_t sccb)
@@ -498,90 +379,53 @@ void s390_sclp_init(void)
 {
     Object *new = object_new(TYPE_SCLP);
 
-    object_property_add_child(qdev_get_machine(), TYPE_SCLP, new,
-                              NULL);
-    object_unref(OBJECT(new));
-    qdev_init_nofail(DEVICE(new));
+    object_property_add_child(qdev_get_machine(), TYPE_SCLP, new);
+    object_unref(new);
+    qdev_realize(DEVICE(new), NULL, &error_fatal);
 }
 
 static void sclp_realize(DeviceState *dev, Error **errp)
 {
     MachineState *machine = MACHINE(qdev_get_machine());
     SCLPDevice *sclp = SCLP(dev);
-    Error *err = NULL;
     uint64_t hw_limit;
     int ret;
 
-    object_property_set_bool(OBJECT(sclp->event_facility), true, "realized",
-                             &err);
-    if (err) {
-        goto out;
-    }
     /*
      * qdev_device_add searches the sysbus for TYPE_SCLP_EVENTS_BUS. As long
      * as we can't find a fitting bus via the qom tree, we have to add the
      * event facility to the sysbus, so e.g. a sclp console can be created.
      */
-    qdev_set_parent_bus(DEVICE(sclp->event_facility), sysbus_get_default());
+    if (!sysbus_realize(SYS_BUS_DEVICE(sclp->event_facility), errp)) {
+        return;
+    }
 
     ret = s390_set_memory_limit(machine->maxram_size, &hw_limit);
     if (ret == -E2BIG) {
-        error_setg(&err, "host supports a maximum of %" PRIu64 " GB",
-                   hw_limit >> 30);
+        error_setg(errp, "host supports a maximum of %" PRIu64 " GB",
+                   hw_limit / GiB);
     } else if (ret) {
-        error_setg(&err, "setting the guest size failed");
+        error_setg(errp, "setting the guest size failed");
     }
-
-out:
-    error_propagate(errp, err);
 }
 
 static void sclp_memory_init(SCLPDevice *sclp)
 {
     MachineState *machine = MACHINE(qdev_get_machine());
+    MachineClass *machine_class = MACHINE_GET_CLASS(qdev_get_machine());
     ram_addr_t initial_mem = machine->ram_size;
-    ram_addr_t max_mem = machine->maxram_size;
-    ram_addr_t standby_mem = max_mem - initial_mem;
-    ram_addr_t pad_mem = 0;
     int increment_size = 20;
 
     /* The storage increment size is a multiple of 1M and is a power of 2.
-     * The number of storage increments must be MAX_STORAGE_INCREMENTS or fewer.
+     * For some machine types, the number of storage increments must be
+     * MAX_STORAGE_INCREMENTS or fewer.
      * The variable 'increment_size' is an exponent of 2 that can be
      * used to calculate the size (in bytes) of an increment. */
-    while ((initial_mem >> increment_size) > MAX_STORAGE_INCREMENTS) {
+    while (machine_class->fixup_ram_size != NULL &&
+           (initial_mem >> increment_size) > MAX_STORAGE_INCREMENTS) {
         increment_size++;
     }
-    if (machine->ram_slots) {
-        while ((standby_mem >> increment_size) > MAX_STORAGE_INCREMENTS) {
-            increment_size++;
-        }
-    }
     sclp->increment_size = increment_size;
-
-    /* The core and standby memory areas need to be aligned with
-     * the increment size.  In effect, this can cause the
-     * user-specified memory size to be rounded down to align
-     * with the nearest increment boundary. */
-    initial_mem = initial_mem >> increment_size << increment_size;
-    standby_mem = standby_mem >> increment_size << increment_size;
-
-    /* If the size of ram is not on a MEM_SECTION_SIZE boundary,
-       calculate the pad size necessary to force this boundary. */
-    if (machine->ram_slots && standby_mem) {
-        sclpMemoryHotplugDev *mhd = init_sclp_memory_hotplug_dev();
-
-        if (initial_mem % MEM_SECTION_SIZE) {
-            pad_mem = MEM_SECTION_SIZE - initial_mem % MEM_SECTION_SIZE;
-        }
-        mhd->increment_size = increment_size;
-        mhd->pad_size = pad_mem;
-        mhd->standby_mem_size = standby_mem;
-    }
-    machine->ram_size = initial_mem;
-    machine->maxram_size = initial_mem + pad_mem + standby_mem;
-    /* let's propagate the changed ram size into the global variable. */
-    ram_size = initial_mem;
 }
 
 static void sclp_init(Object *obj)
@@ -590,7 +434,7 @@ static void sclp_init(Object *obj)
     Object *new;
 
     new = object_new(TYPE_SCLP_EVENT_FACILITY);
-    object_property_add_child(obj, TYPE_SCLP_EVENT_FACILITY, new, NULL);
+    object_property_add_child(obj, TYPE_SCLP_EVENT_FACILITY, new);
     object_unref(new);
     sclp->event_facility = EVENT_FACILITY(new);
 
@@ -613,11 +457,6 @@ static void sclp_class_init(ObjectClass *oc, void *data)
     dc->user_creatable = false;
 
     sc->read_SCP_info = read_SCP_info;
-    sc->read_storage_element0_info = read_storage_element0_info;
-    sc->read_storage_element1_info = read_storage_element1_info;
-    sc->attach_storage_element = attach_storage_element;
-    sc->assign_storage = assign_storage;
-    sc->unassign_storage = unassign_storage;
     sc->read_cpu_info = sclp_read_cpu_info;
     sc->execute = sclp_execute;
     sc->service_interrupt = service_interrupt;
@@ -632,42 +471,8 @@ static TypeInfo sclp_info = {
     .class_size = sizeof(SCLPDeviceClass),
 };
 
-sclpMemoryHotplugDev *init_sclp_memory_hotplug_dev(void)
-{
-    DeviceState *dev;
-    dev = qdev_create(NULL, TYPE_SCLP_MEMORY_HOTPLUG_DEV);
-    object_property_add_child(qdev_get_machine(),
-                              TYPE_SCLP_MEMORY_HOTPLUG_DEV,
-                              OBJECT(dev), NULL);
-    qdev_init_nofail(dev);
-    return SCLP_MEMORY_HOTPLUG_DEV(object_resolve_path(
-                                   TYPE_SCLP_MEMORY_HOTPLUG_DEV, NULL));
-}
-
-sclpMemoryHotplugDev *get_sclp_memory_hotplug_dev(void)
-{
-    return SCLP_MEMORY_HOTPLUG_DEV(object_resolve_path(
-                                   TYPE_SCLP_MEMORY_HOTPLUG_DEV, NULL));
-}
-
-static void sclp_memory_hotplug_dev_class_init(ObjectClass *klass,
-                                               void *data)
-{
-    DeviceClass *dc = DEVICE_CLASS(klass);
-
-    set_bit(DEVICE_CATEGORY_MISC, dc->categories);
-}
-
-static TypeInfo sclp_memory_hotplug_dev_info = {
-    .name = TYPE_SCLP_MEMORY_HOTPLUG_DEV,
-    .parent = TYPE_SYS_BUS_DEVICE,
-    .instance_size = sizeof(sclpMemoryHotplugDev),
-    .class_init = sclp_memory_hotplug_dev_class_init,
-};
-
 static void register_types(void)
 {
-    type_register_static(&sclp_memory_hotplug_dev_info);
     type_register_static(&sclp_info);
 }
 type_init(register_types);

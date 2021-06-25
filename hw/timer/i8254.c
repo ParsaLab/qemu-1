@@ -21,13 +21,14 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
+
 #include "qemu/osdep.h"
-#include "hw/hw.h"
-#include "hw/i386/pc.h"
-#include "hw/isa/isa.h"
+#include "hw/irq.h"
+#include "qemu/module.h"
 #include "qemu/timer.h"
 #include "hw/timer/i8254.h"
 #include "hw/timer/i8254_internal.h"
+#include "qom/object.h"
 
 //#define DEBUG_PIT
 
@@ -36,14 +37,15 @@
 #define RW_STATE_WORD0 3
 #define RW_STATE_WORD1 4
 
-#define PIT_CLASS(class) OBJECT_CLASS_CHECK(PITClass, (class), TYPE_I8254)
-#define PIT_GET_CLASS(obj) OBJECT_GET_CLASS(PITClass, (obj), TYPE_I8254)
+typedef struct PITClass PITClass;
+DECLARE_CLASS_CHECKERS(PITClass, PIT,
+                       TYPE_I8254)
 
-typedef struct PITClass {
+struct PITClass {
     PITCommonClass parent_class;
 
     DeviceRealize parent_realize;
-} PITClass;
+};
 
 static void pit_irq_timer_update(PITChannelState *s, int64_t current_time);
 
@@ -322,7 +324,7 @@ static void pit_post_load(PITCommonState *s)
 {
     PITChannelState *sc = &s->channels[0];
 
-    if (sc->next_transition_time != -1) {
+    if (sc->next_transition_time != -1 && !sc->irq_disabled) {
         timer_mod(sc->irq_timer, sc->next_transition_time);
     } else {
         timer_del(sc->irq_timer);
@@ -359,13 +361,12 @@ static void pit_class_initfn(ObjectClass *klass, void *data)
     PITCommonClass *k = PIT_COMMON_CLASS(klass);
     DeviceClass *dc = DEVICE_CLASS(klass);
 
-    pc->parent_realize = dc->realize;
-    dc->realize = pit_realizefn;
+    device_class_set_parent_realize(dc, pit_realizefn, &pc->parent_realize);
     k->set_channel_gate = pit_set_channel_gate;
     k->get_channel_info = pit_get_channel_info_common;
     k->post_load = pit_post_load;
     dc->reset = pit_reset;
-    dc->props = pit_properties;
+    device_class_set_props(dc, pit_properties);
 }
 
 static const TypeInfo pit_info = {

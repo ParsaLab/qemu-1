@@ -21,6 +21,7 @@
 
 #include "qemu/osdep.h"
 #include "qxl.h"
+#include "sysemu/runstate.h"
 #include "trace.h"
 
 static void qxl_blit(PCIQXLDevice *qxl, QXLRect *rect)
@@ -78,7 +79,7 @@ void qxl_render_resize(PCIQXLDevice *qxl)
         qxl->guest_primary.bits_pp = 32;
         break;
     default:
-        fprintf(stderr, "%s: unhandled format: %x\n", __FUNCTION__,
+        fprintf(stderr, "%s: unhandled format: %x\n", __func__,
                 qxl->guest_primary.surface.format);
         qxl->guest_primary.bytes_pp = 4;
         qxl->guest_primary.bits_pp = 32;
@@ -98,6 +99,8 @@ static void qxl_render_update_area_unlocked(PCIQXLDevice *qxl)
 {
     VGACommonState *vga = &qxl->vga;
     DisplaySurface *surface;
+    int width = qxl->guest_head0_width ?: qxl->guest_primary.surface.width;
+    int height = qxl->guest_head0_height ?: qxl->guest_primary.surface.height;
     int i;
 
     if (qxl->guest_primary.resized) {
@@ -106,13 +109,13 @@ static void qxl_render_update_area_unlocked(PCIQXLDevice *qxl)
                                                 qxl->guest_primary.surface.mem,
                                                 MEMSLOT_GROUP_GUEST);
         if (!qxl->guest_primary.data) {
-            return;
+            goto end;
         }
         qxl_set_rect_to_surface(qxl, &qxl->dirty[0]);
         qxl->num_dirty_rects = 1;
         trace_qxl_render_guest_primary_resized(
-               qxl->guest_primary.surface.width,
-               qxl->guest_primary.surface.height,
+               width,
+               height,
                qxl->guest_primary.qxl_stride,
                qxl->guest_primary.bytes_pp,
                qxl->guest_primary.bits_pp);
@@ -120,21 +123,21 @@ static void qxl_render_update_area_unlocked(PCIQXLDevice *qxl)
             pixman_format_code_t format =
                 qemu_default_pixman_format(qxl->guest_primary.bits_pp, true);
             surface = qemu_create_displaysurface_from
-                (qxl->guest_primary.surface.width,
-                 qxl->guest_primary.surface.height,
+                (width,
+                 height,
                  format,
                  qxl->guest_primary.abs_stride,
                  qxl->guest_primary.data);
         } else {
             surface = qemu_create_displaysurface
-                (qxl->guest_primary.surface.width,
-                 qxl->guest_primary.surface.height);
+                (width,
+                 height);
         }
         dpy_gfx_replace_surface(vga->con, surface);
     }
 
     if (!qxl->guest_primary.data) {
-        return;
+        goto end;
     }
     for (i = 0; i < qxl->num_dirty_rects; i++) {
         if (qemu_spice_rect_is_empty(qxl->dirty+i)) {
@@ -144,8 +147,8 @@ static void qxl_render_update_area_unlocked(PCIQXLDevice *qxl)
             qxl->dirty[i].top < 0 ||
             qxl->dirty[i].left > qxl->dirty[i].right ||
             qxl->dirty[i].top > qxl->dirty[i].bottom ||
-            qxl->dirty[i].right > qxl->guest_primary.surface.width ||
-            qxl->dirty[i].bottom > qxl->guest_primary.surface.height) {
+            qxl->dirty[i].right > width ||
+            qxl->dirty[i].bottom > height) {
             continue;
         }
         qxl_blit(qxl, qxl->dirty+i);
@@ -155,6 +158,11 @@ static void qxl_render_update_area_unlocked(PCIQXLDevice *qxl)
                        qxl->dirty[i].bottom - qxl->dirty[i].top);
     }
     qxl->num_dirty_rects = 0;
+
+end:
+    if (qxl->render_update_cookie_num == 0) {
+        graphic_hw_update_done(qxl->ssd.dcl.con);
+    }
 }
 
 /*
@@ -169,9 +177,11 @@ void qxl_render_update(PCIQXLDevice *qxl)
 
     qemu_mutex_lock(&qxl->ssd.lock);
 
-    if (!runstate_is_running() || !qxl->guest_primary.commands) {
+    if (!runstate_is_running() || !qxl->guest_primary.commands ||
+        qxl->mode == QXL_MODE_UNDEFINED) {
         qxl_render_update_area_unlocked(qxl);
         qemu_mutex_unlock(&qxl->ssd.lock);
+        graphic_hw_update_done(qxl->ssd.dcl.con);
         return;
     }
 
@@ -233,12 +243,28 @@ static QEMUCursor *qxl_cursor(PCIQXLDevice *qxl, QXLCursor *cursor,
                               uint32_t group_id)
 {
     QEMUCursor *c;
+    uint8_t *and_mask, *xor_mask;
     size_t size;
 
     c = cursor_alloc(cursor->header.width, cursor->header.height);
     c->hot_x = cursor->header.hot_spot_x;
     c->hot_y = cursor->header.hot_spot_y;
     switch (cursor->header.type) {
+    case SPICE_CURSOR_TYPE_MONO:
+        /* Assume that the full cursor is available in a single chunk. */
+        size = 2 * cursor_get_mono_bpl(c) * c->height;
+        if (size != cursor->data_size) {
+            fprintf(stderr, "%s: bad monochrome cursor %ux%u with size %u\n",
+                    __func__, c->width, c->height, cursor->data_size);
+            goto fail;
+        }
+        and_mask = cursor->chunk.data;
+        xor_mask = and_mask + cursor_get_mono_bpl(c) * c->height;
+        cursor_set_mono(c, 0xffffff, 0x000000, xor_mask, 1, and_mask);
+        if (qxl->debug > 2) {
+            cursor_print_ascii_art(c, "qxl/mono");
+        }
+        break;
     case SPICE_CURSOR_TYPE_ALPHA:
         size = sizeof(uint32_t) * cursor->header.width * cursor->header.height;
         qxl_unpack_chunks(c->data, size, qxl, &cursor->chunk, group_id);
@@ -248,7 +274,7 @@ static QEMUCursor *qxl_cursor(PCIQXLDevice *qxl, QXLCursor *cursor,
         break;
     default:
         fprintf(stderr, "%s: not implemented: type %d\n",
-                __FUNCTION__, cursor->header.type);
+                __func__, cursor->header.type);
         goto fail;
     }
     return c;
@@ -275,7 +301,7 @@ int qxl_render_cursor(PCIQXLDevice *qxl, QXLCommandExt *ext)
     }
 
     if (qxl->debug > 1 && cmd->type != QXL_CURSOR_MOVE) {
-        fprintf(stderr, "%s", __FUNCTION__);
+        fprintf(stderr, "%s", __func__);
         qxl_log_cmd_cursor(qxl, cmd, ext->group_id);
         fprintf(stderr, "\n");
     }

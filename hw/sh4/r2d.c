@@ -24,27 +24,28 @@
  */
 
 #include "qemu/osdep.h"
+#include "qemu/units.h"
 #include "qapi/error.h"
-#include "qemu-common.h"
 #include "cpu.h"
 #include "hw/sysbus.h"
-#include "hw/hw.h"
 #include "hw/sh4/sh.h"
-#include "hw/devices.h"
+#include "sysemu/reset.h"
+#include "sysemu/runstate.h"
 #include "sysemu/sysemu.h"
 #include "hw/boards.h"
 #include "hw/pci/pci.h"
+#include "hw/qdev-properties.h"
 #include "net/net.h"
 #include "sh7750_regs.h"
 #include "hw/ide.h"
+#include "hw/irq.h"
 #include "hw/loader.h"
 #include "hw/usb.h"
 #include "hw/block/flash.h"
-#include "sysemu/block-backend.h"
 #include "exec/address-spaces.h"
 
 #define FLASH_BASE 0x00000000
-#define FLASH_SIZE 0x02000000
+#define FLASH_SIZE (16 * MiB)
 
 #define SDRAM_BASE 0x0c000000 /* Physical location of SDRAM: Area 3 */
 #define SDRAM_SIZE 0x04000000
@@ -139,11 +140,11 @@ static uint64_t r2d_fpga_read(void *opaque, hwaddr addr, unsigned int size)
     case PA_IRLMSK:
         return s->irlmsk;
     case PA_OUTPORT:
-	return s->outport;
+        return s->outport;
     case PA_POWOFF:
-	return 0x00;
+        return 0x00;
     case PA_VERREG:
-	return 0x10;
+        return 0x10;
     }
 
     return 0;
@@ -158,18 +159,18 @@ r2d_fpga_write(void *opaque, hwaddr addr, uint64_t value, unsigned int size)
     case PA_IRLMSK:
         s->irlmsk = value;
         update_irl(s);
-	break;
+        break;
     case PA_OUTPORT:
-	s->outport = value;
-	break;
+        s->outport = value;
+        break;
     case PA_POWOFF:
         if (value & 1) {
             qemu_system_shutdown_request(SHUTDOWN_CAUSE_GUEST_SHUTDOWN);
         }
         break;
     case PA_VERREG:
-	/* Discard writes */
-	break;
+        /* Discard writes */
+        break;
     }
 }
 
@@ -220,12 +221,11 @@ static struct QEMU_PACKED
 
     char pad[232];
 
-    char kernel_cmdline[256];
+    char kernel_cmdline[256] QEMU_NONSTRING;
 } boot_params;
 
 static void r2d_init(MachineState *machine)
 {
-    const char *cpu_model = machine->cpu_model;
     const char *kernel_filename = machine->kernel_filename;
     const char *kernel_cmdline = machine->kernel_cmdline;
     const char *initrd_filename = machine->initrd_filename;
@@ -242,11 +242,7 @@ static void r2d_init(MachineState *machine)
     MemoryRegion *address_space_mem = get_system_memory();
     PCIBus *pci_bus;
 
-    if (cpu_model == NULL) {
-        cpu_model = "SH7751R";
-    }
-
-    cpu = SUPERH_CPU(cpu_generic_init(TYPE_SUPERH_CPU, cpu_model));
+    cpu = SUPERH_CPU(cpu_create(machine->cpu_type));
     env = &cpu->env;
 
     reset_info = g_malloc0(sizeof(ResetData));
@@ -261,9 +257,9 @@ static void r2d_init(MachineState *machine)
     s = sh7750_init(cpu, address_space_mem);
     irq = r2d_fpga_init(address_space_mem, 0x04000000, sh7750_irl(s));
 
-    dev = qdev_create(NULL, "sh_pci");
+    dev = qdev_new("sh_pci");
     busdev = SYS_BUS_DEVICE(dev);
-    qdev_init_nofail(dev);
+    sysbus_realize_and_unref(busdev, &error_fatal);
     pci_bus = PCI_BUS(qdev_get_child_bus(dev, "pci"));
     sysbus_mmio_map(busdev, 0, P4ADDR(0x1e200000));
     sysbus_mmio_map(busdev, 1, A7ADDR(0x1e200000));
@@ -272,33 +268,40 @@ static void r2d_init(MachineState *machine)
     sysbus_connect_irq(busdev, 2, irq[PCI_INTC]);
     sysbus_connect_irq(busdev, 3, irq[PCI_INTD]);
 
-    dev = qdev_create(NULL, "sysbus-sm501");
+    dev = qdev_new("sysbus-sm501");
     busdev = SYS_BUS_DEVICE(dev);
     qdev_prop_set_uint32(dev, "vram-size", SM501_VRAM_SIZE);
     qdev_prop_set_uint32(dev, "base", 0x10000000);
-    qdev_prop_set_ptr(dev, "chr-state", serial_hds[2]);
-    qdev_init_nofail(dev);
+    qdev_prop_set_chr(dev, "chardev", serial_hd(2));
+    sysbus_realize_and_unref(busdev, &error_fatal);
     sysbus_mmio_map(busdev, 0, 0x10000000);
     sysbus_mmio_map(busdev, 1, 0x13e00000);
     sysbus_connect_irq(busdev, 0, irq[SM501]);
 
     /* onboard CF (True IDE mode, Master only). */
     dinfo = drive_get(IF_IDE, 0, 0);
-    dev = qdev_create(NULL, "mmio-ide");
+    dev = qdev_new("mmio-ide");
     busdev = SYS_BUS_DEVICE(dev);
     sysbus_connect_irq(busdev, 0, irq[CF_IDE]);
     qdev_prop_set_uint32(dev, "shift", 1);
-    qdev_init_nofail(dev);
+    sysbus_realize_and_unref(busdev, &error_fatal);
     sysbus_mmio_map(busdev, 0, 0x14001000);
     sysbus_mmio_map(busdev, 1, 0x1400080c);
     mmio_ide_init_drives(dev, dinfo, NULL);
 
-    /* onboard flash memory */
+    /*
+     * Onboard flash memory
+     * According to the old board user document in Japanese (under
+     * NDA) what is referred to as FROM (Area0) is connected via a
+     * 32-bit bus and CS0 to CN8. The docs mention a Cypress
+     * S29PL127J60TFI130 chipsset.  Per the 'S29PL-J 002-00615
+     * Rev. *E' datasheet, it is a 128Mbit NOR parallel flash
+     * addressable in words of 16bit.
+     */
     dinfo = drive_get(IF_PFLASH, 0, 0);
-    pflash_cfi02_register(0x0, NULL, "r2d.flash", FLASH_SIZE,
+    pflash_cfi02_register(0x0, "r2d.flash", FLASH_SIZE,
                           dinfo ? blk_by_legacy_dinfo(dinfo) : NULL,
-                          (16 * 1024), FLASH_SIZE >> 16,
-                          1, 4, 0x0000, 0x0000, 0x0000, 0x0000,
+                          64 * KiB, 1, 2, 0x0001, 0x227e, 0x2220, 0x2200,
                           0x555, 0x2aa, 0);
 
     /* NIC: rtl8139 on-board, and 2 slots. */
@@ -365,6 +368,7 @@ static void r2d_machine_init(MachineClass *mc)
     mc->desc = "r2d-plus board";
     mc->init = r2d_init;
     mc->block_default_type = IF_IDE;
+    mc->default_cpu_type = TYPE_SH7751R_CPU;
 }
 
 DEFINE_MACHINE("r2d", r2d_machine_init)

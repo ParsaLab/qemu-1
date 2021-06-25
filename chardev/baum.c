@@ -1,7 +1,7 @@
 /*
  * QEMU Baum Braille Device
  *
- * Copyright (c) 2008, 2010-2011, 2016 Samuel Thibault
+ * Copyright (c) 2008, 2010-2011, 2016-2017 Samuel Thibault
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -21,16 +21,19 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
+
 #include "qemu/osdep.h"
 #include "qapi/error.h"
-#include "qemu-common.h"
 #include "chardev/char.h"
+#include "qemu/main-loop.h"
+#include "qemu/module.h"
 #include "qemu/timer.h"
 #include "hw/usb.h"
 #include "ui/console.h"
 #include <brlapi.h>
 #include <brlapi_constants.h>
 #include <brlapi_keycodes.h>
+#include "qom/object.h"
 
 #if 0
 #define DPRINTF(fmt, ...) \
@@ -84,7 +87,7 @@
 
 #define BUF_SIZE 256
 
-typedef struct {
+struct BaumChardev {
     Chardev parent;
 
     brlapi_handle_t *brlapi;
@@ -98,10 +101,12 @@ typedef struct {
     uint8_t out_buf_used, out_buf_ptr;
 
     QEMUTimer *cellCount_timer;
-} BaumChardev;
+};
+typedef struct BaumChardev BaumChardev;
 
 #define TYPE_CHARDEV_BRAILLE "chardev-braille"
-#define BAUM_CHARDEV(obj) OBJECT_CHECK(BaumChardev, (obj), TYPE_CHARDEV_BRAILLE)
+DECLARE_INSTANCE_CHECKER(BaumChardev, BAUM_CHARDEV,
+                         TYPE_CHARDEV_BRAILLE)
 
 /* Let's assume NABCC by default */
 enum way {
@@ -238,6 +243,12 @@ static int baum_deferred_init(BaumChardev *baum)
     if (brlapi__getDisplaySize(baum->brlapi, &baum->x, &baum->y) == -1) {
         brlapi_perror("baum: brlapi__getDisplaySize");
         return 0;
+    }
+    if (baum->y > 1) {
+        baum->y = 1;
+    }
+    if (baum->x > 84) {
+        baum->x = 84;
     }
 
     con = qemu_console_lookup_by_index(0);

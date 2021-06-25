@@ -27,12 +27,10 @@ typedef unsigned long long __u64;
 #define false 0
 #define PAGE_SIZE 4096
 
-#ifndef EIO
 #define EIO     1
-#endif
-#ifndef EBUSY
 #define EBUSY   2
-#endif
+#define ENODEV  3
+
 #ifndef NULL
 #define NULL    0
 #endif
@@ -49,40 +47,53 @@ typedef unsigned long long __u64;
 #include "cio.h"
 #include "iplb.h"
 
-typedef struct irb Irb;
-typedef struct ccw1 Ccw1;
-typedef struct cmd_orb CmdOrb;
-typedef struct schib Schib;
-typedef struct chsc_area_sda ChscAreaSda;
-typedef struct senseid SenseId;
-typedef struct subchannel_id SubChannelId;
-
 /* start.s */
-void disabled_wait(void);
+void disabled_wait(void) __attribute__ ((__noreturn__));
 void consume_sclp_int(void);
+void consume_io_int(void);
 
 /* main.c */
-void panic(const char *string);
 void write_subsystem_identification(void);
+void write_iplb_location(void);
 extern char stack[PAGE_SIZE * 8] __attribute__((__aligned__(PAGE_SIZE)));
 unsigned int get_loadparm_index(void);
 
 /* sclp.c */
 void sclp_print(const char *string);
+void sclp_set_write_mask(uint32_t receive_mask, uint32_t send_mask);
 void sclp_setup(void);
 void sclp_get_loadparm_ascii(char *loadparm);
+int sclp_read(char *str, size_t count);
 
 /* virtio.c */
 unsigned long virtio_load_direct(ulong rec_list1, ulong rec_list2,
                                  ulong subchan_id, void *load_addr);
 bool virtio_is_supported(SubChannelId schid);
-void virtio_blk_setup_device(SubChannelId schid);
+int virtio_blk_setup_device(SubChannelId schid);
 int virtio_read(ulong sector, void *load_addr);
-int enable_mss_facility(void);
-ulong get_second(void);
 
 /* bootmap.c */
 void zipl_load(void);
+
+/* jump2ipl.c */
+void write_reset_psw(uint64_t psw);
+void jump_to_IPL_code(uint64_t address);
+void jump_to_low_kernel(void);
+
+/* menu.c */
+void menu_set_parms(uint8_t boot_menu_flag, uint32_t boot_menu_timeout);
+int menu_get_zipl_boot_index(const char *menu_data);
+bool menu_is_enabled_zipl(void);
+int menu_get_enum_boot_index(bool *valid_entries);
+bool menu_is_enabled_enum(void);
+
+#define MAX_BOOT_ENTRIES  31
+
+static inline void panic(const char *string)
+{
+    sclp_print(string);
+    disabled_wait();
+}
 
 static inline void fill_hex(char *out, unsigned char val)
 {
@@ -135,23 +146,7 @@ static inline void debug_print_addr(const char *desc, void *p)
 #define KVM_S390_VIRTIO_SET_STATUS      2
 #define KVM_S390_VIRTIO_CCW_NOTIFY      3
 
-static inline void yield(void)
-{
-    asm volatile ("diag 0,0,0x44"
-                  : :
-                  : "memory", "cc");
-}
-
 #define MAX_SECTOR_SIZE 4096
-
-static inline void sleep(unsigned int seconds)
-{
-    ulong target = get_second() + seconds;
-
-    while (get_second() < target) {
-        yield();
-    }
-}
 
 static inline void IPL_assert(bool term, const char *message)
 {

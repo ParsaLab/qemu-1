@@ -16,7 +16,6 @@
  */
 
 #include "qemu/osdep.h"
-#include "qemu-common.h"
 #include "net/checksum.h"
 #include "net/eth.h"
 
@@ -43,7 +42,7 @@ uint32_t net_checksum_add_cont(int len, uint8_t *buf, int seq)
 uint16_t net_checksum_finish(uint32_t sum)
 {
     while (sum>>16)
-	sum = (sum & 0xFFFF)+(sum >> 16);
+        sum = (sum & 0xFFFF)+(sum >> 16);
     return ~sum;
 }
 
@@ -58,10 +57,11 @@ uint16_t net_checksum_tcpudp(uint16_t length, uint16_t proto,
     return net_checksum_finish(sum);
 }
 
-void net_checksum_calculate(uint8_t *data, int length)
+void net_checksum_calculate(uint8_t *data, int length, int csum_flag)
 {
     int mac_hdr_len, ip_len;
     struct ip_header *ip;
+    uint16_t csum;
 
     /*
      * Note: We cannot assume "data" is aligned, so the all code uses
@@ -107,6 +107,17 @@ void net_checksum_calculate(uint8_t *data, int length)
         return; /* not IPv4 */
     }
 
+    /* Calculate IP checksum */
+    if (csum_flag & CSUM_IP) {
+        stw_he_p(&ip->ip_sum, 0);
+        csum = net_raw_checksum((uint8_t *)ip, IP_HDR_GET_LEN(ip));
+        stw_be_p(&ip->ip_sum, csum);
+    }
+
+    if (IP4_IS_FRAGMENT(ip)) {
+        return; /* a fragmented IP packet */
+    }
+
     ip_len = lduw_be_p(&ip->ip_len);
 
     /* Last, check that we have enough data for the all IP frame */
@@ -119,7 +130,10 @@ void net_checksum_calculate(uint8_t *data, int length)
     switch (ip->ip_p) {
     case IP_PROTO_TCP:
     {
-        uint16_t csum;
+        if (!(csum_flag & CSUM_TCP)) {
+            return;
+        }
+
         tcp_header *tcp = (tcp_header *)(ip + 1);
 
         if (ip_len < sizeof(tcp_header)) {
@@ -140,7 +154,10 @@ void net_checksum_calculate(uint8_t *data, int length)
     }
     case IP_PROTO_UDP:
     {
-        uint16_t csum;
+        if (!(csum_flag & CSUM_UDP)) {
+            return;
+        }
+
         udp_header *udp = (udp_header *)(ip + 1);
 
         if (ip_len < sizeof(udp_header)) {

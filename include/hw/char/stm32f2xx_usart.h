@@ -27,7 +27,7 @@
 
 #include "hw/sysbus.h"
 #include "chardev/char-fe.h"
-#include "hw/hw.h"
+#include "qom/object.h"
 
 #define USART_SR   0x00
 #define USART_DR   0x04
@@ -37,7 +37,12 @@
 #define USART_CR3  0x14
 #define USART_GTPR 0x18
 
-#define USART_SR_RESET 0x00C00000
+/*
+ * NB: The reset value mentioned in "24.6.1 Status register" seems bogus.
+ * Looking at "Table 98 USART register map and reset values", it seems it
+ * should be 0xc0, and that's how real hardware behaves.
+ */
+#define USART_SR_RESET (USART_SR_TXE | USART_SR_TC)
 
 #define USART_SR_TXE  (1 << 7)
 #define USART_SR_TC   (1 << 6)
@@ -49,10 +54,9 @@
 #define USART_CR1_RE  (1 << 2)
 
 #define TYPE_STM32F2XX_USART "stm32f2xx-usart"
-#define STM32F2XX_USART(obj) \
-    OBJECT_CHECK(STM32F2XXUsartState, (obj), TYPE_STM32F2XX_USART)
+OBJECT_DECLARE_SIMPLE_TYPE(STM32F2XXUsartState, STM32F2XX_USART)
 
-typedef struct {
+struct STM32F2XXUsartState {
     /* <private> */
     SysBusDevice parent_obj;
 
@@ -69,5 +73,5 @@ typedef struct {
 
     CharBackend chr;
     qemu_irq irq;
-} STM32F2XXUsartState;
+};
 #endif /* HW_STM32F2XX_USART_H */

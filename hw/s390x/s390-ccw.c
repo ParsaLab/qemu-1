@@ -10,23 +10,66 @@
  * or (at your option) any later version. See the COPYING file in the
  * top-level directory.
  */
+
 #include "qemu/osdep.h"
+#include <libgen.h>
 #include "qapi/error.h"
+#include "qemu/module.h"
 #include "hw/sysbus.h"
-#include "libgen.h"
 #include "hw/s390x/css.h"
 #include "hw/s390x/css-bridge.h"
 #include "hw/s390x/s390-ccw.h"
+#include "sysemu/sysemu.h"
 
-int s390_ccw_cmd_request(ORB *orb, SCSW *scsw, void *data)
+IOInstEnding s390_ccw_cmd_request(SubchDev *sch)
 {
-    S390CCWDeviceClass *cdc = S390_CCW_DEVICE_GET_CLASS(data);
+    S390CCWDeviceClass *cdc = S390_CCW_DEVICE_GET_CLASS(sch->driver_data);
 
-    if (cdc->handle_request) {
-        return cdc->handle_request(orb, scsw, data);
-    } else {
+    if (!cdc->handle_request) {
+        return IOINST_CC_STATUS_PRESENT;
+    }
+    return cdc->handle_request(sch);
+}
+
+int s390_ccw_halt(SubchDev *sch)
+{
+    S390CCWDeviceClass *cdc = S390_CCW_DEVICE_GET_CLASS(sch->driver_data);
+
+    if (!cdc->handle_halt) {
         return -ENOSYS;
     }
+    return cdc->handle_halt(sch);
+}
+
+int s390_ccw_clear(SubchDev *sch)
+{
+    S390CCWDeviceClass *cdc = S390_CCW_DEVICE_GET_CLASS(sch->driver_data);
+
+    if (!cdc->handle_clear) {
+        return -ENOSYS;
+    }
+    return cdc->handle_clear(sch);
+}
+
+IOInstEnding s390_ccw_store(SubchDev *sch)
+{
+    S390CCWDeviceClass *cdc = NULL;
+    int ret = IOINST_CC_EXPECTED;
+
+    /*
+     * This code is called for both virtual and passthrough devices,
+     * but only applies to to the latter.  This ugly check makes that
+     * distinction for us.
+     */
+    if (object_dynamic_cast(OBJECT(sch->driver_data), TYPE_S390_CCW)) {
+        cdc = S390_CCW_DEVICE_GET_CLASS(sch->driver_data);
+    }
+
+    if (cdc && cdc->handle_store) {
+        ret = cdc->handle_store(sch);
+    }
+
+    return ret;
 }
 
 static void s390_ccw_get_dev_info(S390CCWDevice *cdev,
@@ -48,7 +91,7 @@ static void s390_ccw_get_dev_info(S390CCWDevice *cdev,
         return;
     }
 
-    cdev->mdevid = g_strdup(basename(dev_path));
+    cdev->mdevid = g_path_get_basename(dev_path);
 
     tmp = basename(dirname(dev_path));
     if (sscanf(tmp, "%2x.%1x.%4x", &cssid, &ssid, &devid) != 3) {
@@ -67,8 +110,6 @@ static void s390_ccw_realize(S390CCWDevice *cdev, char *sysfsdev, Error **errp)
     CcwDevice *ccw_dev = CCW_DEVICE(cdev);
     CCWDeviceClass *ck = CCW_DEVICE_GET_CLASS(ccw_dev);
     DeviceState *parent = DEVICE(ccw_dev);
-    BusState *qbus = qdev_get_parent_bus(parent);
-    VirtualCssBus *cbus = VIRTUAL_CSS_BUS(qbus);
     SubchDev *sch;
     int ret;
     Error *err = NULL;
@@ -78,7 +119,7 @@ static void s390_ccw_realize(S390CCWDevice *cdev, char *sysfsdev, Error **errp)
         goto out_err_propagate;
     }
 
-    sch = css_create_sch(ccw_dev->devno, false, cbus->squash_mcss, &err);
+    sch = css_create_sch(ccw_dev->devno, &err);
     if (!sch) {
         goto out_mdevid_free;
     }
@@ -112,7 +153,7 @@ out_err_propagate:
     error_propagate(errp, err);
 }
 
-static void s390_ccw_unrealize(S390CCWDevice *cdev, Error **errp)
+static void s390_ccw_unrealize(S390CCWDevice *cdev)
 {
     CcwDevice *ccw_dev = CCW_DEVICE(cdev);
     SubchDev *sch = ccw_dev->sch;
@@ -124,6 +165,14 @@ static void s390_ccw_unrealize(S390CCWDevice *cdev, Error **errp)
     }
 
     g_free(cdev->mdevid);
+}
+
+static void s390_ccw_instance_init(Object *obj)
+{
+    S390CCWDevice *dev = S390_CCW_DEVICE(obj);
+
+    device_add_bootindex_property(obj, &dev->bootindex, "bootindex",
+                                  "/disk@0,0", DEVICE(obj));
 }
 
 static void s390_ccw_class_init(ObjectClass *klass, void *data)
@@ -139,6 +188,7 @@ static void s390_ccw_class_init(ObjectClass *klass, void *data)
 static const TypeInfo s390_ccw_info = {
     .name          = TYPE_S390_CCW,
     .parent        = TYPE_CCW_DEVICE,
+    .instance_init = s390_ccw_instance_init,
     .instance_size = sizeof(S390CCWDevice),
     .class_size    = sizeof(S390CCWDeviceClass),
     .class_init    = s390_ccw_class_init,

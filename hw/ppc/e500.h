@@ -2,13 +2,28 @@
 #define PPCE500_H
 
 #include "hw/boards.h"
+#include "hw/platform-bus.h"
+#include "qom/object.h"
 
-typedef struct PPCE500Params {
-    int pci_first_slot;
-    int pci_nr_slots;
+struct PPCE500MachineState {
+    /*< private >*/
+    MachineState parent_obj;
+
+    /* points to instance of TYPE_PLATFORM_BUS_DEVICE if
+     * board supports dynamic sysbus devices
+     */
+    PlatformBusDevice *pbus_dev;
+};
+
+struct PPCE500MachineClass {
+    /*< private >*/
+    MachineClass parent_class;
 
     /* required -- must at least add toplevel board compatible */
-    void (*fixup_devtree)(struct PPCE500Params *params, void *fdt);
+    void (*fixup_devtree)(void *fdt);
+
+    int pci_first_slot;
+    int pci_nr_slots;
 
     int mpic_version;
     bool has_mpc8xxx_gpio;
@@ -22,10 +37,13 @@ typedef struct PPCE500Params {
     hwaddr pci_mmio_base;
     hwaddr pci_mmio_bus_base;
     hwaddr spin_base;
-} PPCE500Params;
+};
 
-void ppce500_init(MachineState *machine, PPCE500Params *params);
+void ppce500_init(MachineState *machine);
 
 hwaddr booke206_page_size_to_tlb(uint64_t size);
+
+#define TYPE_PPCE500_MACHINE      "ppce500-base-machine"
+OBJECT_DECLARE_TYPE(PPCE500MachineState, PPCE500MachineClass, PPCE500_MACHINE)
 
 #endif

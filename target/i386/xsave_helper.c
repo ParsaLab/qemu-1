@@ -3,9 +3,7 @@
  * See the COPYING file in the top-level directory.
  */
 #include "qemu/osdep.h"
-#include "qapi/error.h"
 
-#include "qemu-common.h"
 #include "cpu.h"
 
 void x86_cpu_xsave_all_areas(X86CPU *cpu, X86XSaveArea *buf)

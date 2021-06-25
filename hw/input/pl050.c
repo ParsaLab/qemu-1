@@ -9,13 +9,17 @@
 
 #include "qemu/osdep.h"
 #include "hw/sysbus.h"
+#include "migration/vmstate.h"
 #include "hw/input/ps2.h"
+#include "hw/irq.h"
 #include "qemu/log.h"
+#include "qemu/module.h"
+#include "qom/object.h"
 
 #define TYPE_PL050 "pl050"
-#define PL050(obj) OBJECT_CHECK(PL050State, (obj), TYPE_PL050)
+OBJECT_DECLARE_SIMPLE_TYPE(PL050State, PL050)
 
-typedef struct PL050State {
+struct PL050State {
     SysBusDevice parent_obj;
 
     MemoryRegion iomem;
@@ -26,7 +30,7 @@ typedef struct PL050State {
     int pending;
     qemu_irq irq;
     bool is_mouse;
-} PL050State;
+};
 
 static const VMStateDescription vmstate_pl050 = {
     .name = "pl050",
@@ -139,19 +143,19 @@ static const MemoryRegionOps pl050_ops = {
     .endianness = DEVICE_NATIVE_ENDIAN,
 };
 
-static int pl050_initfn(SysBusDevice *dev)
+static void pl050_realize(DeviceState *dev, Error **errp)
 {
     PL050State *s = PL050(dev);
+    SysBusDevice *sbd = SYS_BUS_DEVICE(dev);
 
     memory_region_init_io(&s->iomem, OBJECT(s), &pl050_ops, s, "pl050", 0x1000);
-    sysbus_init_mmio(dev, &s->iomem);
-    sysbus_init_irq(dev, &s->irq);
+    sysbus_init_mmio(sbd, &s->iomem);
+    sysbus_init_irq(sbd, &s->irq);
     if (s->is_mouse) {
         s->dev = ps2_mouse_init(pl050_update, s);
     } else {
         s->dev = ps2_kbd_init(pl050_update, s);
     }
-    return 0;
 }
 
 static void pl050_keyboard_init(Object *obj)
@@ -183,9 +187,8 @@ static const TypeInfo pl050_mouse_info = {
 static void pl050_class_init(ObjectClass *oc, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(oc);
-    SysBusDeviceClass *sdc = SYS_BUS_DEVICE_CLASS(oc);
 
-    sdc->init = pl050_initfn;
+    dc->realize = pl050_realize;
     dc->vmsd = &vmstate_pl050;
 }
 

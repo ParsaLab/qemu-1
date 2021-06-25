@@ -6,7 +6,7 @@
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2 of the License, or (at your option) any later version.
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -21,13 +21,25 @@
 #include "qapi/error.h"
 #include "cpu.h"
 #include "qemu/log.h"
+#include "qemu/module.h"
 #include "hw/sysbus.h"
+#include "migration/vmstate.h"
 
 #include "hw/misc/mips_cpc.h"
+#include "hw/qdev-properties.h"
 
 static inline uint64_t cpc_vp_run_mask(MIPSCPCState *cpc)
 {
     return (1ULL << cpc->num_vp) - 1;
+}
+
+static void mips_cpu_reset_async_work(CPUState *cs, run_on_cpu_data data)
+{
+    MIPSCPCState *cpc = (MIPSCPCState *) data.host_ptr;
+
+    cpu_reset(cs);
+    cs->halted = 0;
+    cpc->vp_running |= 1ULL << cs->cpu_index;
 }
 
 static void cpc_run_vp(MIPSCPCState *cpc, uint64_t vp_run)
@@ -37,8 +49,13 @@ static void cpc_run_vp(MIPSCPCState *cpc, uint64_t vp_run)
     CPU_FOREACH(cs) {
         uint64_t i = 1ULL << cs->cpu_index;
         if (i & vp_run & ~cpc->vp_running) {
-            cpu_reset(cs);
-            cpc->vp_running |= i;
+            /*
+             * To avoid racing with a CPU we are just kicking off.
+             * We do the final bit of preparation for the work in
+             * the target CPUs context.
+             */
+            async_safe_run_on_cpu(cs, mips_cpu_reset_async_work,
+                                  RUN_ON_CPU_HOST_PTR(cpc));
         }
     }
 }
@@ -159,7 +176,7 @@ static void mips_cpc_class_init(ObjectClass *klass, void *data)
     dc->realize = mips_cpc_realize;
     dc->reset = mips_cpc_reset;
     dc->vmsd = &vmstate_mips_cpc;
-    dc->props = mips_cpc_properties;
+    device_class_set_props(dc, mips_cpc_properties);
 }
 
 static const TypeInfo mips_cpc_info = {

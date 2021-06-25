@@ -29,20 +29,27 @@
 #ifndef QEMU_MIGRATION_RAM_H
 #define QEMU_MIGRATION_RAM_H
 
-#include "qemu-common.h"
+#include "qapi/qapi-types-migration.h"
 #include "exec/cpu-common.h"
+#include "io/channel.h"
 
 extern MigrationStats ram_counters;
 extern XBZRLECacheStats xbzrle_counters;
+extern CompressionStats compression_counters;
 
-int64_t xbzrle_cache_resize(int64_t new_size);
+bool ramblock_is_ignored(RAMBlock *block);
+/* Should be holding either ram_list.mutex, or the RCU lock. */
+#define RAMBLOCK_FOREACH_NOT_IGNORED(block)            \
+    INTERNAL_RAMBLOCK_FOREACH(block)                   \
+        if (ramblock_is_ignored(block)) {} else
+
+#define RAMBLOCK_FOREACH_MIGRATABLE(block)             \
+    INTERNAL_RAMBLOCK_FOREACH(block)                   \
+        if (!qemu_ram_is_migratable(block)) {} else
+
+int xbzrle_cache_resize(uint64_t new_size, Error **errp);
 uint64_t ram_bytes_remaining(void);
 uint64_t ram_bytes_total(void);
-
-int multifd_save_setup(void);
-int multifd_save_cleanup(Error **errp);
-int multifd_load_setup(void);
-int multifd_load_cleanup(Error **errp);
 
 uint64_t ram_pagesize_summary(void);
 int ram_save_queue_pages(const char *rbname, ram_addr_t start, ram_addr_t len);
@@ -57,4 +64,26 @@ int ram_discard_range(const char *block_name, uint64_t start, size_t length);
 int ram_postcopy_incoming_init(MigrationIncomingState *mis);
 
 void ram_handle_compressed(void *host, uint8_t ch, uint64_t size);
+
+int ramblock_recv_bitmap_test(RAMBlock *rb, void *host_addr);
+bool ramblock_recv_bitmap_test_byte_offset(RAMBlock *rb, uint64_t byte_offset);
+void ramblock_recv_bitmap_set(RAMBlock *rb, void *host_addr);
+void ramblock_recv_bitmap_set_range(RAMBlock *rb, void *host_addr, size_t nr);
+int64_t ramblock_recv_bitmap_send(QEMUFile *file,
+                                  const char *block_name);
+int ram_dirty_bitmap_reload(MigrationState *s, RAMBlock *rb);
+
+/* ram cache */
+int colo_init_ram_cache(void);
+void colo_flush_ram_cache(void);
+void colo_release_ram_cache(void);
+void colo_incoming_start_dirty_log(void);
+
+/* Background snapshot */
+bool ram_write_tracking_available(void);
+bool ram_write_tracking_compatible(void);
+void ram_write_tracking_prepare(void);
+int ram_write_tracking_start(void);
+void ram_write_tracking_stop(void);
+
 #endif

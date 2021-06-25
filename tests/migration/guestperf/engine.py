@@ -6,7 +6,7 @@
 # This library is free software; you can redistribute it and/or
 # modify it under the terms of the GNU Lesser General Public
 # License as published by the Free Software Foundation; either
-# version 2 of the License, or (at your option) any later version.
+# version 2.1 of the License, or (at your option) any later version.
 #
 # This library is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -23,12 +23,13 @@ import re
 import sys
 import time
 
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'scripts'))
-import qemu
-import qmp.qmp
 from guestperf.progress import Progress, ProgressStats
 from guestperf.report import Report
 from guestperf.timings import TimingRecord, Timings
+
+sys.path.append(os.path.join(os.path.dirname(__file__),
+                             '..', '..', '..', 'python'))
+from qemu.machine import QEMUMachine
 
 
 class Engine(object):
@@ -101,7 +102,7 @@ class Engine(object):
             info.get("downtime", 0),
             info.get("expected-downtime", 0),
             info.get("setup-time", 0),
-            info.get("x-cpu-throttle-percentage", 0),
+            info.get("cpu-throttle-percentage", 0),
         )
 
     def _migrate(self, hardware, scenario, src, dst, connect_uri):
@@ -109,7 +110,7 @@ class Engine(object):
         src_vcpu_time = []
         src_pid = src.get_pid()
 
-        vcpus = src.command("query-cpus")
+        vcpus = src.command("query-cpus-fast")
         src_threads = []
         for vcpu in vcpus:
             src_threads.append(vcpu["thread_id"])
@@ -117,7 +118,7 @@ class Engine(object):
         # XXX how to get dst timings on remote host ?
 
         if self._verbose:
-            print "Sleeping %d seconds for initial guest workload run" % self._sleep
+            print("Sleeping %d seconds for initial guest workload run" % self._sleep)
         sleep_secs = self._sleep
         while sleep_secs > 1:
             src_qemu_time.append(self._cpu_timing(src_pid))
@@ -126,7 +127,7 @@ class Engine(object):
             sleep_secs -= 1
 
         if self._verbose:
-            print "Starting migration"
+            print("Starting migration")
         if scenario._auto_converge:
             resp = src.command("migrate-set-capabilities",
                                capabilities = [
@@ -134,7 +135,7 @@ class Engine(object):
                                      "state": True }
                                ])
             resp = src.command("migrate-set-parameters",
-                               x_cpu_throttle_increment=scenario._auto_converge_step)
+                               cpu_throttle_increment=scenario._auto_converge_step)
 
         if scenario._post_copy:
             resp = src.command("migrate-set-capabilities",
@@ -148,11 +149,11 @@ class Engine(object):
                                      "state": True }
                                ])
 
-        resp = src.command("migrate_set_speed",
-                           value=scenario._bandwidth * 1024 * 1024)
+        resp = src.command("migrate-set-parameters",
+                           max_bandwidth=scenario._bandwidth * 1024 * 1024)
 
-        resp = src.command("migrate_set_downtime",
-                           value=scenario._downtime / 1024.0)
+        resp = src.command("migrate-set-parameters",
+                           downtime_limit=scenario._downtime / 1024.0)
 
         if scenario._compression_mt:
             resp = src.command("migrate-set-capabilities",
@@ -181,9 +182,11 @@ class Engine(object):
                                    { "capability": "xbzrle",
                                      "state": True }
                                ])
-            resp = src.command("migrate-set-cache-size",
-                               value=(hardware._mem * 1024 * 1024 * 1024 / 100 *
-                                      scenario._compression_xbzrle_cache))
+            resp = src.command("migrate-set-parameters",
+                               xbzrle_cache_size=(
+                                   hardware._mem *
+                                   1024 * 1024 * 1024 / 100 *
+                                   scenario._compression_xbzrle_cache))
 
         resp = src.command("migrate", uri=connect_uri)
 
@@ -216,7 +219,7 @@ class Engine(object):
 
                 if progress._status == "completed":
                     if self._verbose:
-                        print "Sleeping %d seconds for final guest workload run" % self._sleep
+                        print("Sleeping %d seconds for final guest workload run" % self._sleep)
                     sleep_secs = self._sleep
                     while sleep_secs > 1:
                         time.sleep(1)
@@ -227,23 +230,23 @@ class Engine(object):
                 return [progress_history, src_qemu_time, src_vcpu_time]
 
             if self._verbose and (loop % 20) == 0:
-                print "Iter %d: remain %5dMB of %5dMB (total %5dMB @ %5dMb/sec)" % (
+                print("Iter %d: remain %5dMB of %5dMB (total %5dMB @ %5dMb/sec)" % (
                     progress._ram._iterations,
                     progress._ram._remaining_bytes / (1024 * 1024),
                     progress._ram._total_bytes / (1024 * 1024),
                     progress._ram._transferred_bytes / (1024 * 1024),
                     progress._ram._transfer_rate_mbs,
-                )
+                ))
 
             if progress._ram._iterations > scenario._max_iters:
                 if self._verbose:
-                    print "No completion after %d iterations over RAM" % scenario._max_iters
+                    print("No completion after %d iterations over RAM" % scenario._max_iters)
                 src.command("migrate_cancel")
                 continue
 
             if time.time() > (start + scenario._max_time):
                 if self._verbose:
-                    print "No completion after %d seconds" % scenario._max_time
+                    print("No completion after %d seconds" % scenario._max_time)
                 src.command("migrate_cancel")
                 continue
 
@@ -251,7 +254,7 @@ class Engine(object):
                 progress._ram._iterations >= scenario._post_copy_iters and
                 not post_copy):
                 if self._verbose:
-                    print "Switching to post-copy after %d iterations" % scenario._post_copy_iters
+                    print("Switching to post-copy after %d iterations" % scenario._post_copy_iters)
                 resp = src.command("migrate-start-postcopy")
                 post_copy = True
 
@@ -259,7 +262,7 @@ class Engine(object):
                 progress._ram._iterations >= scenario._pause_iters and
                 not paused):
                 if self._verbose:
-                    print "Pausing VM after %d iterations" % scenario._pause_iters
+                    print("Pausing VM after %d iterations" % scenario._pause_iters)
                 resp = src.command("stop")
                 paused = True
 
@@ -285,7 +288,7 @@ class Engine(object):
             cmdline = "'" + cmdline + "'"
 
         argv = [
-            "-machine", "accel=kvm",
+            "-accel", "kvm",
             "-cpu", "host",
             "-kernel", self._kernel,
             "-initrd", self._initrd,
@@ -303,7 +306,7 @@ class Engine(object):
             argv_source += ["-mem-path", "/dev/shm",
                             "-mem-prealloc"]
         if hardware._locked_pages:
-            argv_source += ["-realtime", "mlock=on"]
+            argv_source += ["-overcommit", "mem-lock=on"]
         if hardware._huge_pages:
             pass
 
@@ -348,7 +351,7 @@ class Engine(object):
         if not log:
             return []
         if self._debug:
-            print log
+            print(log)
 
         regex = r"[^\s]+\s\((\d+)\):\sINFO:\s(\d+)ms\scopied\s\d+\sGB\sin\s(\d+)ms"
         matcher = re.compile(regex)
@@ -384,19 +387,17 @@ class Engine(object):
             dstmonaddr = "/var/tmp/qemu-dst-%d-monitor.sock" % os.getpid()
         srcmonaddr = "/var/tmp/qemu-src-%d-monitor.sock" % os.getpid()
 
-        src = qemu.QEMUMachine(self._binary,
-                               args=self._get_src_args(hardware),
-                               wrapper=self._get_src_wrapper(hardware),
-                               name="qemu-src-%d" % os.getpid(),
-                               monitor_address=srcmonaddr,
-                               debug=self._debug)
+        src = QEMUMachine(self._binary,
+                          args=self._get_src_args(hardware),
+                          wrapper=self._get_src_wrapper(hardware),
+                          name="qemu-src-%d" % os.getpid(),
+                          monitor_address=srcmonaddr)
 
-        dst = qemu.QEMUMachine(self._binary,
-                               args=self._get_dst_args(hardware, uri),
-                               wrapper=self._get_dst_wrapper(hardware),
-                               name="qemu-dst-%d" % os.getpid(),
-                               monitor_address=dstmonaddr,
-                               debug=self._debug)
+        dst = QEMUMachine(self._binary,
+                          args=self._get_dst_args(hardware, uri),
+                          wrapper=self._get_dst_wrapper(hardware),
+                          name="qemu-dst-%d" % os.getpid(),
+                          monitor_address=dstmonaddr)
 
         try:
             src.launch()
@@ -408,8 +409,15 @@ class Engine(object):
             vcpu_timings = ret[2]
             if uri[0:5] == "unix:":
                 os.remove(uri[5:])
+
+            if os.path.exists(srcmonaddr):
+                os.remove(srcmonaddr)
+
+            if self._dst_host == "localhost" and os.path.exists(dstmonaddr):
+                os.remove(dstmonaddr)
+
             if self._verbose:
-                print "Finished migration"
+                print("Finished migration")
 
             src.shutdown()
             dst.shutdown()
@@ -422,7 +430,7 @@ class Engine(object):
                           self._initrd, self._transport, self._sleep)
         except Exception as e:
             if self._debug:
-                print "Failed: %s" % str(e)
+                print("Failed: %s" % str(e))
             try:
                 src.shutdown()
             except:
@@ -433,7 +441,7 @@ class Engine(object):
                 pass
 
             if self._debug:
-                print src.get_log()
-                print dst.get_log()
+                print(src.get_log())
+                print(dst.get_log())
             raise
 

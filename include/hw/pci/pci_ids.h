@@ -164,6 +164,7 @@
 #define PCI_DEVICE_ID_LSI_SAS0079        0x0079
 
 #define PCI_VENDOR_ID_DEC                0x1011
+#define PCI_DEVICE_ID_DEC_21143          0x0019
 #define PCI_DEVICE_ID_DEC_21154          0x0026
 
 #define PCI_VENDOR_ID_CIRRUS             0x1013
@@ -191,6 +192,9 @@
 #define PCI_DEVICE_ID_SUN_SIMBA          0x5000
 #define PCI_DEVICE_ID_SUN_SABRE          0xa000
 
+#define PCI_VENDOR_ID_ORACLE             0x108e
+#define PCI_DEVICE_ID_REMOTE_IOHUB       0xb000
+
 #define PCI_VENDOR_ID_CMD                0x1095
 #define PCI_DEVICE_ID_CMD_646            0x0646
 
@@ -203,9 +207,10 @@
 #define PCI_DEVICE_ID_VIA_ISA_BRIDGE     0x0686
 #define PCI_DEVICE_ID_VIA_IDE            0x0571
 #define PCI_DEVICE_ID_VIA_UHCI           0x3038
-#define PCI_DEVICE_ID_VIA_ACPI           0x3057
+#define PCI_DEVICE_ID_VIA_82C686B_PM     0x3057
 #define PCI_DEVICE_ID_VIA_AC97           0x3058
 #define PCI_DEVICE_ID_VIA_MC97           0x3068
+#define PCI_DEVICE_ID_VIA_8231_PM        0x8235
 
 #define PCI_VENDOR_ID_MARVELL            0x11ab
 
@@ -255,7 +260,7 @@
 #define PCI_DEVICE_ID_INTEL_82801I_EHCI2 0x293c
 #define PCI_DEVICE_ID_INTEL_82599_SFP_VF 0x10ed
 
-#define PCI_DEVICE_ID_INTEL_Q35_MCH      0x29c0
+#define PCI_DEVICE_ID_INTEL_P35_MCH      0x29c0
 
 #define PCI_VENDOR_ID_XEN                0x5853
 #define PCI_DEVICE_ID_XEN_PLATFORM       0x0001
@@ -265,5 +270,12 @@
 
 #define PCI_VENDOR_ID_TEWS               0x1498
 #define PCI_DEVICE_ID_TEWS_TPCI200       0x30C8
+
+#define PCI_VENDOR_ID_VMWARE             0x15ad
+#define PCI_DEVICE_ID_VMWARE_PVRDMA      0x0820
+
+#define PCI_VENDOR_ID_SYNOPSYS           0x16C3
+
+#define PCI_VENDOR_ID_NVIDIA             0x10de
 
 #endif

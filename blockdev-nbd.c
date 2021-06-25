@@ -13,48 +13,64 @@
 #include "sysemu/blockdev.h"
 #include "sysemu/block-backend.h"
 #include "hw/block/block.h"
-#include "qapi/qmp/qerror.h"
-#include "sysemu/sysemu.h"
-#include "qmp-commands.h"
+#include "qapi/error.h"
+#include "qapi/clone-visitor.h"
+#include "qapi/qapi-visit-block-export.h"
+#include "qapi/qapi-commands-block-export.h"
 #include "block/nbd.h"
 #include "io/channel-socket.h"
+#include "io/net-listener.h"
 
 typedef struct NBDServerData {
-    QIOChannelSocket *listen_ioc;
-    int watch;
+    QIONetListener *listener;
     QCryptoTLSCreds *tlscreds;
+    char *tlsauthz;
+    uint32_t max_connections;
+    uint32_t connections;
 } NBDServerData;
 
 static NBDServerData *nbd_server;
+static bool is_qemu_nbd;
+
+static void nbd_update_server_watch(NBDServerData *s);
+
+void nbd_server_is_qemu_nbd(bool value)
+{
+    is_qemu_nbd = value;
+}
+
+bool nbd_server_is_running(void)
+{
+    return nbd_server || is_qemu_nbd;
+}
 
 static void nbd_blockdev_client_closed(NBDClient *client, bool ignored)
 {
     nbd_client_put(client);
+    assert(nbd_server->connections > 0);
+    nbd_server->connections--;
+    nbd_update_server_watch(nbd_server);
 }
 
-static gboolean nbd_accept(QIOChannel *ioc, GIOCondition condition,
-                           gpointer opaque)
+static void nbd_accept(QIONetListener *listener, QIOChannelSocket *cioc,
+                       gpointer opaque)
 {
-    QIOChannelSocket *cioc;
-
-    if (!nbd_server) {
-        return FALSE;
-    }
-
-    cioc = qio_channel_socket_accept(QIO_CHANNEL_SOCKET(ioc),
-                                     NULL);
-    if (!cioc) {
-        return TRUE;
-    }
+    nbd_server->connections++;
+    nbd_update_server_watch(nbd_server);
 
     qio_channel_set_name(QIO_CHANNEL(cioc), "nbd-server");
-    nbd_client_new(NULL, cioc,
-                   nbd_server->tlscreds, NULL,
+    nbd_client_new(cioc, nbd_server->tlscreds, nbd_server->tlsauthz,
                    nbd_blockdev_client_closed);
-    object_unref(OBJECT(cioc));
-    return TRUE;
 }
 
+static void nbd_update_server_watch(NBDServerData *s)
+{
+    if (!s->max_connections || s->connections < s->max_connections) {
+        qio_net_listener_set_client_func(s->listener, nbd_accept, NULL, NULL);
+    } else {
+        qio_net_listener_set_client_func(s->listener, NULL, NULL, NULL);
+    }
+}
 
 static void nbd_server_free(NBDServerData *server)
 {
@@ -62,13 +78,12 @@ static void nbd_server_free(NBDServerData *server)
         return;
     }
 
-    if (server->watch != -1) {
-        g_source_remove(server->watch);
-    }
-    object_unref(OBJECT(server->listen_ioc));
+    qio_net_listener_disconnect(server->listener);
+    object_unref(OBJECT(server->listener));
     if (server->tlscreds) {
         object_unref(OBJECT(server->tlscreds));
     }
+    g_free(server->tlsauthz);
 
     g_free(server);
 }
@@ -104,6 +119,7 @@ static QCryptoTLSCreds *nbd_get_tls_creds(const char *id, Error **errp)
 
 
 void nbd_server_start(SocketAddress *addr, const char *tls_creds,
+                      const char *tls_authz, uint32_t max_connections,
                       Error **errp)
 {
     if (nbd_server) {
@@ -112,12 +128,18 @@ void nbd_server_start(SocketAddress *addr, const char *tls_creds,
     }
 
     nbd_server = g_new0(NBDServerData, 1);
-    nbd_server->watch = -1;
-    nbd_server->listen_ioc = qio_channel_socket_new();
-    qio_channel_set_name(QIO_CHANNEL(nbd_server->listen_ioc),
-                         "nbd-listener");
-    if (qio_channel_socket_listen_sync(
-            nbd_server->listen_ioc, addr, errp) < 0) {
+    nbd_server->max_connections = max_connections;
+    nbd_server->listener = qio_net_listener_new();
+
+    qio_net_listener_set_name(nbd_server->listener,
+                              "nbd-listener");
+
+    /*
+     * Because this server is persistent, a backlog of SOMAXCONN is
+     * better than trying to size it to max_connections.
+     */
+    if (qio_net_listener_open_sync(nbd_server->listener, addr, SOMAXCONN,
+                                   errp) < 0) {
         goto error;
     }
 
@@ -134,12 +156,9 @@ void nbd_server_start(SocketAddress *addr, const char *tls_creds,
         }
     }
 
-    nbd_server->watch = qio_channel_add_watch(
-        QIO_CHANNEL(nbd_server->listen_ioc),
-        G_IO_IN,
-        nbd_accept,
-        NULL,
-        NULL);
+    nbd_server->tlsauthz = g_strdup(tls_authz);
+
+    nbd_update_server_watch(nbd_server);
 
     return;
 
@@ -148,64 +167,111 @@ void nbd_server_start(SocketAddress *addr, const char *tls_creds,
     nbd_server = NULL;
 }
 
+void nbd_server_start_options(NbdServerOptions *arg, Error **errp)
+{
+    nbd_server_start(arg->addr, arg->tls_creds, arg->tls_authz,
+                     arg->max_connections, errp);
+}
+
 void qmp_nbd_server_start(SocketAddressLegacy *addr,
                           bool has_tls_creds, const char *tls_creds,
+                          bool has_tls_authz, const char *tls_authz,
+                          bool has_max_connections, uint32_t max_connections,
                           Error **errp)
 {
     SocketAddress *addr_flat = socket_address_flatten(addr);
 
-    nbd_server_start(addr_flat, tls_creds, errp);
+    nbd_server_start(addr_flat, tls_creds, tls_authz, max_connections, errp);
     qapi_free_SocketAddress(addr_flat);
 }
 
-void qmp_nbd_server_add(const char *device, bool has_writable, bool writable,
-                        Error **errp)
+void qmp_nbd_server_add(NbdServerAddOptions *arg, Error **errp)
 {
-    BlockDriverState *bs = NULL;
+    BlockExport *export;
+    BlockDriverState *bs;
     BlockBackend *on_eject_blk;
-    NBDExport *exp;
+    BlockExportOptions *export_opts;
 
+    bs = bdrv_lookup_bs(arg->device, arg->device, errp);
+    if (!bs) {
+        return;
+    }
+
+    /*
+     * block-export-add would default to the node-name, but we may have to use
+     * the device name as a default here for compatibility.
+     */
+    if (!arg->has_name) {
+        arg->has_name = true;
+        arg->name = g_strdup(arg->device);
+    }
+
+    export_opts = g_new(BlockExportOptions, 1);
+    *export_opts = (BlockExportOptions) {
+        .type                   = BLOCK_EXPORT_TYPE_NBD,
+        .id                     = g_strdup(arg->name),
+        .node_name              = g_strdup(bdrv_get_node_name(bs)),
+        .has_writable           = arg->has_writable,
+        .writable               = arg->writable,
+    };
+    QAPI_CLONE_MEMBERS(BlockExportOptionsNbdBase, &export_opts->u.nbd,
+                       qapi_NbdServerAddOptions_base(arg));
+    if (arg->has_bitmap) {
+        export_opts->u.nbd.has_bitmaps = true;
+        QAPI_LIST_PREPEND(export_opts->u.nbd.bitmaps, g_strdup(arg->bitmap));
+    }
+
+    /*
+     * nbd-server-add doesn't complain when a read-only device should be
+     * exported as writable, but simply downgrades it. This is an error with
+     * block-export-add.
+     */
+    if (bdrv_is_read_only(bs)) {
+        export_opts->has_writable = true;
+        export_opts->writable = false;
+    }
+
+    export = blk_exp_add(export_opts, errp);
+    if (!export) {
+        goto fail;
+    }
+
+    /*
+     * nbd-server-add removes the export when the named BlockBackend used for
+     * @device goes away.
+     */
+    on_eject_blk = blk_by_name(arg->device);
+    if (on_eject_blk) {
+        nbd_export_set_on_eject_blk(export, on_eject_blk);
+    }
+
+fail:
+    qapi_free_BlockExportOptions(export_opts);
+}
+
+void qmp_nbd_server_remove(const char *name,
+                           bool has_mode, BlockExportRemoveMode mode,
+                           Error **errp)
+{
+    BlockExport *exp;
+
+    exp = blk_exp_find(name);
+    if (exp && exp->drv->type != BLOCK_EXPORT_TYPE_NBD) {
+        error_setg(errp, "Block export '%s' is not an NBD export", name);
+        return;
+    }
+
+    qmp_block_export_del(name, has_mode, mode, errp);
+}
+
+void qmp_nbd_server_stop(Error **errp)
+{
     if (!nbd_server) {
         error_setg(errp, "NBD server not running");
         return;
     }
 
-    if (nbd_export_find(device)) {
-        error_setg(errp, "NBD server already exporting device '%s'", device);
-        return;
-    }
-
-    on_eject_blk = blk_by_name(device);
-
-    bs = bdrv_lookup_bs(device, device, errp);
-    if (!bs) {
-        return;
-    }
-
-    if (!has_writable) {
-        writable = false;
-    }
-    if (bdrv_is_read_only(bs)) {
-        writable = false;
-    }
-
-    exp = nbd_export_new(bs, 0, -1, writable ? 0 : NBD_FLAG_READ_ONLY,
-                         NULL, false, on_eject_blk, errp);
-    if (!exp) {
-        return;
-    }
-
-    nbd_export_set_name(exp, device);
-
-    /* The list of named exports has a strong reference to this export now and
-     * our only way of accessing it is through nbd_export_find(), so we can drop
-     * the strong reference that is @exp. */
-    nbd_export_put(exp);
-}
-
-void qmp_nbd_server_stop(Error **errp)
-{
-    nbd_export_close_all();
+    blk_exp_close_all_type(BLOCK_EXPORT_TYPE_NBD);
 
     nbd_server_free(nbd_server);
     nbd_server = NULL;

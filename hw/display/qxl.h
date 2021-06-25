@@ -1,16 +1,14 @@
 #ifndef HW_QXL_H
 #define HW_QXL_H
 
-#include "qemu-common.h"
 
-#include "ui/console.h"
-#include "hw/hw.h"
 #include "hw/pci/pci.h"
 #include "vga_int.h"
 #include "qemu/thread.h"
 
 #include "ui/qemu-spice.h"
 #include "ui/spice-display.h"
+#include "qom/object.h"
 
 enum qxl_mode {
     QXL_MODE_UNDEFINED,
@@ -30,11 +28,12 @@ enum qxl_mode {
 #define QXL_PAGE_BITS 12
 #define QXL_PAGE_SIZE (1 << QXL_PAGE_BITS);
 
-typedef struct PCIQXLDevice {
+struct PCIQXLDevice {
     PCIDevice          pci;
     PortioList         vga_port_list;
     SimpleSpiceDisplay ssd;
     int                id;
+    bool               have_vga;
     uint32_t           debug;
     uint32_t           guestdebug;
     uint32_t           cmdlog;
@@ -44,7 +43,6 @@ typedef struct PCIQXLDevice {
 
     enum qxl_mode      mode;
     uint32_t           cmdflags;
-    int                generation;
     uint32_t           revision;
 
     int32_t            num_memslots;
@@ -80,6 +78,8 @@ typedef struct PCIQXLDevice {
     QXLPHYSICAL        guest_cursor;
 
     QXLPHYSICAL        guest_monitors_config;
+    uint32_t           guest_head0_width;
+    uint32_t           guest_head0_height;
 
     QemuMutex          track_lock;
 
@@ -127,13 +127,13 @@ typedef struct PCIQXLDevice {
     int                num_dirty_rects;
     QXLRect            dirty[QXL_NUM_DIRTY_RECTS];
     QEMUBH            *update_area_bh;
-} PCIQXLDevice;
+};
 
 #define TYPE_PCI_QXL "pci-qxl"
-#define PCI_QXL(obj) OBJECT_CHECK(PCIQXLDevice, (obj), TYPE_PCI_QXL)
+OBJECT_DECLARE_SIMPLE_TYPE(PCIQXLDevice, PCI_QXL)
 
 #define PANIC_ON(x) if ((x)) {                         \
-    printf("%s: PANIC %s failed\n", __FUNCTION__, #x); \
+    printf("%s: PANIC %s failed\n", __func__, #x); \
     abort();                                           \
 }
 
@@ -145,7 +145,7 @@ typedef struct PCIQXLDevice {
         }                                                               \
     } while (0)
 
-#define QXL_DEFAULT_REVISION QXL_REVISION_STABLE_V12
+#define QXL_DEFAULT_REVISION (QXL_REVISION_STABLE_V12 + 1)
 
 /* qxl.c */
 void *qxl_phys2virt(PCIQXLDevice *qxl, QXLPHYSICAL phys, int group_id);

@@ -6,7 +6,7 @@
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2 of the License, or (at your option) any later version.
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -22,7 +22,17 @@
 #include "io/task.h"
 #include "qapi/error.h"
 #include "qemu/thread.h"
+#include "qom/object.h"
 #include "trace.h"
+
+struct QIOTaskThreadData {
+    QIOTaskWorker worker;
+    gpointer opaque;
+    GDestroyNotify destroy;
+    GMainContext *context;
+    GSource *completion;
+};
+
 
 struct QIOTask {
     Object *source;
@@ -32,6 +42,9 @@ struct QIOTask {
     Error *err;
     gpointer result;
     GDestroyNotify destroyResult;
+    QemuMutex thread_lock;
+    QemuCond thread_cond;
+    struct QIOTaskThreadData *thread;
 };
 
 
@@ -49,6 +62,8 @@ QIOTask *qio_task_new(Object *source,
     task->func = func;
     task->opaque = opaque;
     task->destroy = destroy;
+    qemu_mutex_init(&task->thread_lock);
+    qemu_cond_init(&task->thread_cond);
 
     trace_qio_task_new(task, source, func, opaque);
 
@@ -57,6 +72,19 @@ QIOTask *qio_task_new(Object *source,
 
 static void qio_task_free(QIOTask *task)
 {
+    qemu_mutex_lock(&task->thread_lock);
+    if (task->thread) {
+        if (task->thread->destroy) {
+            task->thread->destroy(task->thread->opaque);
+        }
+
+        if (task->thread->context) {
+            g_main_context_unref(task->thread->context);
+        }
+
+        g_free(task->thread);
+    }
+
     if (task->destroy) {
         task->destroy(task->opaque);
     }
@@ -68,30 +96,20 @@ static void qio_task_free(QIOTask *task)
     }
     object_unref(task->source);
 
+    qemu_mutex_unlock(&task->thread_lock);
+    qemu_mutex_destroy(&task->thread_lock);
+    qemu_cond_destroy(&task->thread_cond);
+
     g_free(task);
 }
 
 
-struct QIOTaskThreadData {
-    QIOTask *task;
-    QIOTaskWorker worker;
-    gpointer opaque;
-    GDestroyNotify destroy;
-};
-
-
-static gboolean gio_task_thread_result(gpointer opaque)
+static gboolean qio_task_thread_result(gpointer opaque)
 {
-    struct QIOTaskThreadData *data = opaque;
+    QIOTask *task = opaque;
 
-    trace_qio_task_thread_result(data->task);
-    qio_task_complete(data->task);
-
-    if (data->destroy) {
-        data->destroy(data->opaque);
-    }
-
-    g_free(data);
+    trace_qio_task_thread_result(task);
+    qio_task_complete(task);
 
     return FALSE;
 }
@@ -99,18 +117,32 @@ static gboolean gio_task_thread_result(gpointer opaque)
 
 static gpointer qio_task_thread_worker(gpointer opaque)
 {
-    struct QIOTaskThreadData *data = opaque;
+    QIOTask *task = opaque;
 
-    trace_qio_task_thread_run(data->task);
-    data->worker(data->task, data->opaque);
+    trace_qio_task_thread_run(task);
+
+    task->thread->worker(task, task->thread->opaque);
 
     /* We're running in the background thread, and must only
      * ever report the task results in the main event loop
      * thread. So we schedule an idle callback to report
      * the worker results
      */
-    trace_qio_task_thread_exit(data->task);
-    g_idle_add(gio_task_thread_result, data);
+    trace_qio_task_thread_exit(task);
+
+    qemu_mutex_lock(&task->thread_lock);
+
+    task->thread->completion = g_idle_source_new();
+    g_source_set_callback(task->thread->completion,
+                          qio_task_thread_result, task, NULL);
+    g_source_attach(task->thread->completion,
+                    task->thread->context);
+    g_source_unref(task->thread->completion);
+    trace_qio_task_thread_source_attach(task, task->thread->completion);
+
+    qemu_cond_signal(&task->thread_cond);
+    qemu_mutex_unlock(&task->thread_lock);
+
     return NULL;
 }
 
@@ -118,22 +150,45 @@ static gpointer qio_task_thread_worker(gpointer opaque)
 void qio_task_run_in_thread(QIOTask *task,
                             QIOTaskWorker worker,
                             gpointer opaque,
-                            GDestroyNotify destroy)
+                            GDestroyNotify destroy,
+                            GMainContext *context)
 {
     struct QIOTaskThreadData *data = g_new0(struct QIOTaskThreadData, 1);
     QemuThread thread;
 
-    data->task = task;
+    if (context) {
+        g_main_context_ref(context);
+    }
+
     data->worker = worker;
     data->opaque = opaque;
     data->destroy = destroy;
+    data->context = context;
+
+    task->thread = data;
 
     trace_qio_task_thread_start(task, worker, opaque);
     qemu_thread_create(&thread,
                        "io-task-worker",
                        qio_task_thread_worker,
-                       data,
+                       task,
                        QEMU_THREAD_DETACHED);
+}
+
+
+void qio_task_wait_thread(QIOTask *task)
+{
+    qemu_mutex_lock(&task->thread_lock);
+    g_assert(task->thread != NULL);
+    while (task->thread->completion == NULL) {
+        qemu_cond_wait(&task->thread_cond, &task->thread_lock);
+    }
+
+    trace_qio_task_thread_source_cancel(task, task->thread->completion);
+    g_source_destroy(task->thread->completion);
+    qemu_mutex_unlock(&task->thread_lock);
+
+    qio_task_thread_result(task);
 }
 
 

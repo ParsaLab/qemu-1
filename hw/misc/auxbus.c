@@ -27,10 +27,13 @@
  */
 
 #include "qemu/osdep.h"
+#include "qemu/units.h"
 #include "qemu/log.h"
+#include "qemu/module.h"
 #include "hw/misc/auxbus.h"
 #include "hw/i2c/i2c.h"
 #include "monitor/monitor.h"
+#include "qapi/error.h"
 
 #ifndef DEBUG_AUX
 #define DEBUG_AUX 0
@@ -40,10 +43,8 @@
     if (DEBUG_AUX) {                                                           \
         qemu_log("aux: " fmt , ## __VA_ARGS__);                                \
     }                                                                          \
-} while (0);
+} while (0)
 
-#define TYPE_AUXTOI2C "aux-to-i2c-bridge"
-#define AUXTOI2C(obj) OBJECT_CHECK(AUXTOI2CState, (obj), TYPE_AUXTOI2C)
 
 static void aux_slave_dev_print(Monitor *mon, DeviceState *dev, int indent);
 static inline I2CBus *aux_bridge_get_i2c_bus(AUXTOI2CState *bridge);
@@ -59,23 +60,34 @@ static void aux_bus_class_init(ObjectClass *klass, void *data)
     k->print_dev = aux_slave_dev_print;
 }
 
-AUXBus *aux_init_bus(DeviceState *parent, const char *name)
+AUXBus *aux_bus_init(DeviceState *parent, const char *name)
 {
     AUXBus *bus;
+    Object *auxtoi2c;
 
     bus = AUX_BUS(qbus_create(TYPE_AUX_BUS, parent, name));
-    bus->bridge = AUXTOI2C(qdev_create(BUS(bus), TYPE_AUXTOI2C));
+    auxtoi2c = object_new_with_props(TYPE_AUXTOI2C, OBJECT(bus), "i2c",
+                                     &error_abort, NULL);
+
+    bus->bridge = AUXTOI2C(auxtoi2c);
 
     /* Memory related. */
     bus->aux_io = g_malloc(sizeof(*bus->aux_io));
-    memory_region_init(bus->aux_io, OBJECT(bus), "aux-io", (1 << 20));
+    memory_region_init(bus->aux_io, OBJECT(bus), "aux-io", 1 * MiB);
     address_space_init(&bus->aux_addr_space, bus->aux_io, "aux-io");
     return bus;
 }
 
-static void aux_bus_map_device(AUXBus *bus, AUXSlave *dev, hwaddr addr)
+void aux_bus_realize(AUXBus *bus)
 {
-    memory_region_add_subregion(bus->aux_io, addr, dev->mmio);
+    qdev_realize(DEVICE(bus->bridge), BUS(bus), &error_fatal);
+}
+
+void aux_map_slave(AUXSlave *aux_dev, hwaddr addr)
+{
+    DeviceState *dev = DEVICE(aux_dev);
+    AUXBus *bus = AUX_BUS(qdev_get_parent_bus(dev));
+    memory_region_add_subregion(bus->aux_io, addr, aux_dev->mmio);
 }
 
 static bool aux_bus_is_bridge(AUXBus *bus, DeviceState *dev)
@@ -186,7 +198,7 @@ AUXReply aux_request(AUXBus *bus, AUXCommand cmd, uint32_t address,
         }
         break;
     default:
-        DPRINTF("Not implemented!\n");
+        qemu_log_mask(LOG_UNIMP, "AUX cmd=%u not implemented\n", cmd);
         return AUX_NACK;
     }
 
@@ -215,7 +227,7 @@ static void aux_bridge_class_init(ObjectClass *oc, void *data)
     DeviceClass *dc = DEVICE_CLASS(oc);
 
     /* This device is private and is created only once for each
-     * aux-bus in aux_init_bus(..). So don't allow the user to add one.
+     * aux-bus in aux_bus_init(..). So don't allow the user to add one.
      */
     dc->user_creatable = false;
 }
@@ -234,7 +246,7 @@ static inline I2CBus *aux_bridge_get_i2c_bus(AUXTOI2CState *bridge)
 
 static const TypeInfo aux_to_i2c_type_info = {
     .name = TYPE_AUXTOI2C,
-    .parent = TYPE_DEVICE,
+    .parent = TYPE_AUX_SLAVE,
     .class_init = aux_bridge_class_init,
     .instance_size = sizeof(AUXTOI2CState),
     .instance_init = aux_bridge_init
@@ -257,18 +269,6 @@ static void aux_slave_dev_print(Monitor *mon, DeviceState *dev, int indent)
                    indent, "",
                    object_property_get_uint(OBJECT(s->mmio), "addr", NULL),
                    memory_region_size(s->mmio));
-}
-
-DeviceState *aux_create_slave(AUXBus *bus, const char *type, uint32_t addr)
-{
-    DeviceState *dev;
-
-    dev = DEVICE(object_new(type));
-    assert(dev);
-    qdev_set_parent_bus(dev, &bus->qbus);
-    qdev_init_nofail(dev);
-    aux_bus_map_device(AUX_BUS(qdev_get_parent_bus(dev)), AUX_SLAVE(dev), addr);
-    return dev;
 }
 
 void aux_init_mmio(AUXSlave *aux_slave, MemoryRegion *mmio)

@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 #
 # Option ROM signing utility
 #
@@ -18,7 +20,7 @@ fin = open(sys.argv[1], 'rb')
 fout = open(sys.argv[2], 'wb')
 
 magic = fin.read(2)
-if magic != '\x55\xaa':
+if magic != b'\x55\xaa':
     sys.exit("%s: option ROM does not begin with magic 55 aa" % sys.argv[1])
 
 size_byte = ord(fin.read(1))
@@ -33,7 +35,7 @@ elif len(data) < size:
     # Add padding if necessary, rounding the whole input to a multiple of
     # 512 bytes according to the third byte of the input.
     # size-1 because a final byte is added below to store the checksum.
-    data = data.ljust(size-1, '\0')
+    data = data.ljust(size-1, b'\0')
 else:
     if ord(data[-1:]) != 0:
         sys.stderr.write('WARNING: ROM includes nonzero checksum\n')
@@ -43,14 +45,8 @@ fout.write(data)
 
 checksum = 0
 for b in data:
-    # catch Python 2 vs. 3 differences
-    if isinstance(b, int):
-        checksum += b
-    else:
-        checksum += ord(b)
-checksum = (256 - checksum) % 256
+    checksum = (checksum - b) & 255
 
-# Python 3 no longer allows chr(checksum)
 fout.write(struct.pack('B', checksum))
 
 fin.close()

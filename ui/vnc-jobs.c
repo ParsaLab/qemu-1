@@ -32,6 +32,7 @@
 #include "qemu/sockets.h"
 #include "qemu/main-loop.h"
 #include "block/aio.h"
+#include "trace.h"
 
 /*
  * Locking:
@@ -82,6 +83,7 @@ VncJob *vnc_job_new(VncState *vs)
 {
     VncJob *job = g_new0(VncJob, 1);
 
+    assert(vs->magic == VNC_MAGIC);
     job->vs = vs;
     vnc_lock_queue(queue);
     QLIST_INIT(&job->rectangles);
@@ -92,6 +94,8 @@ VncJob *vnc_job_new(VncState *vs)
 int vnc_job_add_rect(VncJob *job, int x, int y, int w, int h)
 {
     VncRectEntry *entry = g_new0(VncRectEntry, 1);
+
+    trace_vnc_job_add_rect(job->vs, job, x, y, w, h);
 
     entry->rect.x = x;
     entry->rect.y = y;
@@ -148,10 +152,18 @@ void vnc_jobs_consume_buffer(VncState *vs)
             if (vs->ioc_tag) {
                 g_source_remove(vs->ioc_tag);
             }
-            vs->ioc_tag = qio_channel_add_watch(
-                vs->ioc, G_IO_IN | G_IO_OUT, vnc_client_io, vs, NULL);
+            if (vs->disconnecting == FALSE) {
+                vs->ioc_tag = qio_channel_add_watch(
+                    vs->ioc, G_IO_IN | G_IO_HUP | G_IO_ERR | G_IO_OUT,
+                    vnc_client_io, vs, NULL);
+            }
         }
         buffer_move(&vs->output, &vs->jobs_buffer);
+
+        if (vs->job_update == VNC_STATE_UPDATE_FORCE) {
+            vs->force_update_offset = vs->output.offset;
+        }
+        vs->job_update = VNC_STATE_UPDATE_NONE;
     }
     flush = vs->ioc != NULL && vs->abort != true;
     vnc_unlock_output(vs);
@@ -181,15 +193,46 @@ static void vnc_async_encoding_start(VncState *orig, VncState *local)
     local->zlib = orig->zlib;
     local->hextile = orig->hextile;
     local->zrle = orig->zrle;
+    local->client_width = orig->client_width;
+    local->client_height = orig->client_height;
 }
 
 static void vnc_async_encoding_end(VncState *orig, VncState *local)
 {
+    buffer_free(&local->output);
     orig->tight = local->tight;
     orig->zlib = local->zlib;
     orig->hextile = local->hextile;
     orig->zrle = local->zrle;
     orig->lossy_rect = local->lossy_rect;
+}
+
+static bool vnc_worker_clamp_rect(VncState *vs, VncJob *job, VncRect *rect)
+{
+    trace_vnc_job_clamp_rect(vs, job, rect->x, rect->y, rect->w, rect->h);
+
+    if (rect->x >= vs->client_width) {
+        goto discard;
+    }
+    rect->w = MIN(vs->client_width - rect->x, rect->w);
+    if (rect->w == 0) {
+        goto discard;
+    }
+
+    if (rect->y >= vs->client_height) {
+        goto discard;
+    }
+    rect->h = MIN(vs->client_height - rect->y, rect->h);
+    if (rect->h == 0) {
+        goto discard;
+    }
+
+    trace_vnc_job_clamped_rect(vs, job, rect->x, rect->y, rect->w, rect->h);
+    return true;
+
+ discard:
+    trace_vnc_job_discard_rect(vs, job, rect->x, rect->y, rect->w, rect->h);
+    return false;
 }
 
 static int vnc_worker_thread_loop(VncJobQueue *queue)
@@ -207,6 +250,7 @@ static int vnc_worker_thread_loop(VncJobQueue *queue)
     /* Here job can only be NULL if queue->exit is true */
     job = QTAILQ_FIRST(&queue->jobs);
     vnc_unlock_queue(queue);
+    assert(job->vs->magic == VNC_MAGIC);
 
     if (queue->exit) {
         return -1;
@@ -229,6 +273,7 @@ static int vnc_worker_thread_loop(VncJobQueue *queue)
 
     /* Make a local copy of vs and switch output buffers */
     vnc_async_encoding_start(job->vs, &vs);
+    vs.magic = VNC_MAGIC;
 
     /* Start sending rectangles */
     n_rectangles = 0;
@@ -248,14 +293,17 @@ static int vnc_worker_thread_loop(VncJobQueue *queue)
             goto disconnected;
         }
 
-        n = vnc_send_framebuffer_update(&vs, entry->rect.x, entry->rect.y,
-                                        entry->rect.w, entry->rect.h);
+        if (vnc_worker_clamp_rect(&vs, job, &entry->rect)) {
+            n = vnc_send_framebuffer_update(&vs, entry->rect.x, entry->rect.y,
+                                            entry->rect.w, entry->rect.h);
 
-        if (n >= 0) {
-            n_rectangles += n;
+            if (n >= 0) {
+                n_rectangles += n;
+            }
         }
         g_free(entry);
     }
+    trace_vnc_job_nrects(&vs, job, n_rectangles);
     vnc_unlock_display(job->vs->vd);
 
     /* Put n_rectangles at the beginning of the message */
@@ -268,7 +316,7 @@ static int vnc_worker_thread_loop(VncJobQueue *queue)
         /* Copy persistent encoding data */
         vnc_async_encoding_end(job->vs, &vs);
 
-	qemu_bh_schedule(job->vs->bh);
+        qemu_bh_schedule(job->vs->bh);
     }  else {
         buffer_reset(&vs.output);
         /* Copy persistent encoding data */
@@ -282,6 +330,7 @@ disconnected:
     vnc_unlock_queue(queue);
     qemu_cond_broadcast(&queue->cond);
     g_free(job);
+    vs.magic = 0;
     return 0;
 }
 

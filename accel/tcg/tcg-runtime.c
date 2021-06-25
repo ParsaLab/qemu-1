@@ -27,9 +27,10 @@
 #include "exec/helper-proto.h"
 #include "exec/cpu_ldst.h"
 #include "exec/exec-all.h"
-#include "exec/tb-hash.h"
 #include "disas/disas.h"
 #include "exec/log.h"
+#include "tcg/tcg.h"
+#include "exec/tb-lookup.h"
 
 /* 32-bit helpers */
 
@@ -144,37 +145,28 @@ uint64_t HELPER(ctpop_i64)(uint64_t arg)
     return ctpop64(arg);
 }
 
-void *HELPER(lookup_tb_ptr)(CPUArchState *env, target_ulong addr)
+const void *HELPER(lookup_tb_ptr)(CPUArchState *env)
 {
-    CPUState *cpu = ENV_GET_CPU(env);
+    CPUState *cpu = env_cpu(env);
     TranslationBlock *tb;
     target_ulong cs_base, pc;
-    uint32_t flags, addr_hash;
+    uint32_t flags;
 
-    addr_hash = tb_jmp_cache_hash_func(addr);
-    tb = atomic_rcu_read(&cpu->tb_jmp_cache[addr_hash]);
     cpu_get_tb_cpu_state(env, &pc, &cs_base, &flags);
 
-    if (unlikely(!(tb
-                   && tb->pc == addr
-                   && tb->cs_base == cs_base
-                   && tb->flags == flags
-                   && tb->trace_vcpu_dstate == *cpu->trace_dstate))) {
-        tb = tb_htable_lookup(cpu, addr, cs_base, flags);
-        if (!tb) {
-            return tcg_ctx.code_gen_epilogue;
-        }
-        atomic_set(&cpu->tb_jmp_cache[addr_hash], tb);
+    tb = tb_lookup(cpu, pc, cs_base, flags, curr_cflags(cpu));
+    if (tb == NULL) {
+        return tcg_code_gen_epilogue;
     }
-
-    qemu_log_mask_and_addr(CPU_LOG_EXEC, addr,
-                           "Chain %p [%d: " TARGET_FMT_lx "] %s\n",
-                           tb->tc_ptr, cpu->cpu_index, addr,
-                           lookup_symbol(addr));
-    return tb->tc_ptr;
+    qemu_log_mask_and_addr(CPU_LOG_EXEC, pc,
+                           "Chain %d: %p ["
+                           TARGET_FMT_lx "/" TARGET_FMT_lx "/%#x] %s\n",
+                           cpu->cpu_index, tb->tc.ptr, cs_base, pc, flags,
+                           lookup_symbol(pc));
+    return tb->tc.ptr;
 }
 
 void HELPER(exit_atomic)(CPUArchState *env)
 {
-    cpu_loop_exit_atomic(ENV_GET_CPU(env), GETPC());
+    cpu_loop_exit_atomic(env_cpu(env), GETPC());
 }

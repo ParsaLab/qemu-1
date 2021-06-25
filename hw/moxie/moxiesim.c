@@ -24,15 +24,14 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
+
 #include "qemu/osdep.h"
+#include "qemu/error-report.h"
 #include "qapi/error.h"
-#include "qemu-common.h"
 #include "cpu.h"
 #include "hw/sysbus.h"
-#include "hw/hw.h"
-#include "hw/i386/pc.h"
-#include "hw/isa/isa.h"
 #include "net/net.h"
+#include "sysemu/reset.h"
 #include "sysemu/sysemu.h"
 #include "hw/boards.h"
 #include "hw/loader.h"
@@ -41,6 +40,8 @@
 #include "elf.h"
 
 #define PHYS_MEM_BASE 0x80000000
+#define FIRMWARE_BASE 0x1000
+#define FIRMWARE_SIZE (128 * 0x1000)
 
 typedef struct {
     uint64_t ram_size;
@@ -51,18 +52,18 @@ typedef struct {
 
 static void load_kernel(MoxieCPU *cpu, LoaderParams *loader_params)
 {
-    uint64_t entry, kernel_low, kernel_high;
+    uint64_t entry, kernel_high;
+    int64_t initrd_size;
     long kernel_size;
-    long initrd_size;
     ram_addr_t initrd_offset;
 
-    kernel_size = load_elf(loader_params->kernel_filename,  NULL, NULL,
-                           &entry, &kernel_low, &kernel_high, 1, EM_MOXIE,
+    kernel_size = load_elf(loader_params->kernel_filename,  NULL, NULL, NULL,
+                           &entry, NULL, &kernel_high, NULL, 1, EM_MOXIE,
                            0, 0);
 
     if (kernel_size <= 0) {
-        fprintf(stderr, "qemu: could not load kernel '%s'\n",
-                loader_params->kernel_filename);
+        error_report("could not load kernel '%s'",
+                     loader_params->kernel_filename);
         exit(1);
     }
 
@@ -75,18 +76,17 @@ static void load_kernel(MoxieCPU *cpu, LoaderParams *loader_params)
             initrd_offset = (kernel_high + ~TARGET_PAGE_MASK)
               & TARGET_PAGE_MASK;
             if (initrd_offset + initrd_size > loader_params->ram_size) {
-                fprintf(stderr,
-                        "qemu: memory too small for initial ram disk '%s'\n",
-                        loader_params->initrd_filename);
+                error_report("memory too small for initial ram disk '%s'",
+                             loader_params->initrd_filename);
                 exit(1);
             }
             initrd_size = load_image_targphys(loader_params->initrd_filename,
                                               initrd_offset,
-                                              ram_size);
+                                              loader_params->ram_size);
         }
         if (initrd_size == (target_ulong)-1) {
-            fprintf(stderr, "qemu: could not load initial ram disk '%s'\n",
-                    loader_params->initrd_filename);
+            error_report("could not load initial ram disk '%s'",
+                         loader_params->initrd_filename);
             exit(1);
         }
     }
@@ -103,7 +103,6 @@ static void moxiesim_init(MachineState *machine)
 {
     MoxieCPU *cpu = NULL;
     ram_addr_t ram_size = machine->ram_size;
-    const char *cpu_model = machine->cpu_model;
     const char *kernel_filename = machine->kernel_filename;
     const char *kernel_cmdline = machine->kernel_cmdline;
     const char *initrd_filename = machine->initrd_filename;
@@ -115,10 +114,7 @@ static void moxiesim_init(MachineState *machine)
     LoaderParams loader_params;
 
     /* Init CPUs. */
-    if (cpu_model == NULL) {
-        cpu_model = "MoxieLite-moxie-cpu";
-    }
-    cpu = MOXIE_CPU(cpu_generic_init(TYPE_MOXIE_CPU, cpu_model));
+    cpu = MOXIE_CPU(cpu_create(machine->cpu_type));
     env = &cpu->env;
 
     qemu_register_reset(main_cpu_reset, cpu);
@@ -127,8 +123,8 @@ static void moxiesim_init(MachineState *machine)
     memory_region_init_ram(ram, NULL, "moxiesim.ram", ram_size, &error_fatal);
     memory_region_add_subregion(address_space_mem, ram_base, ram);
 
-    memory_region_init_ram(rom, NULL, "moxie.rom", 128 * 0x1000, &error_fatal);
-    memory_region_add_subregion(get_system_memory(), 0x1000, rom);
+    memory_region_init_ram(rom, NULL, "moxie.rom", FIRMWARE_SIZE, &error_fatal);
+    memory_region_add_subregion(get_system_memory(), FIRMWARE_BASE, rom);
 
     if (kernel_filename) {
         loader_params.ram_size = ram_size;
@@ -137,11 +133,16 @@ static void moxiesim_init(MachineState *machine)
         loader_params.initrd_filename = initrd_filename;
         load_kernel(cpu, &loader_params);
     }
+    if (machine->firmware) {
+        if (load_image_targphys(machine->firmware, FIRMWARE_BASE, FIRMWARE_SIZE) < 0) {
+            error_report("Failed to load firmware '%s'", machine->firmware);
+        }
+    }
 
     /* A single 16450 sits at offset 0x3f8.  */
-    if (serial_hds[0]) {
+    if (serial_hd(0)) {
         serial_mm_init(address_space_mem, 0x3f8, 0, env->irq[4],
-                       8000000/16, serial_hds[0], DEVICE_LITTLE_ENDIAN);
+                       8000000/16, serial_hd(0), DEVICE_LITTLE_ENDIAN);
     }
 }
 
@@ -149,7 +150,8 @@ static void moxiesim_machine_init(MachineClass *mc)
 {
     mc->desc = "Moxie simulator platform";
     mc->init = moxiesim_init;
-    mc->is_default = 1;
+    mc->is_default = true;
+    mc->default_cpu_type = MOXIE_CPU_TYPE_NAME("MoxieLite");
 }
 
 DEFINE_MACHINE("moxiesim", moxiesim_machine_init)

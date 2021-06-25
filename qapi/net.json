@@ -1,4 +1,5 @@
 # -*- Mode: Python -*-
+# vim: filetype=python
 #
 
 ##
@@ -19,7 +20,7 @@
 # Returns: Nothing on success
 #          If @name is not a valid network device, DeviceNotFound
 #
-# Since: 0.14.0
+# Since: 0.14
 #
 # Notes: Not all network adapters support setting link status.  This command
 #        will succeed even if the network adapter does not support link status
@@ -39,19 +40,9 @@
 #
 # Add a network backend.
 #
-# @type: the type of network backend.  Current valid values are 'user', 'tap',
-#        'vde', 'socket', 'dump' and 'bridge'
-#
-# @id: the name of the new network backend
-#
 # Additional arguments depend on the type.
 #
-# TODO: This command effectively bypasses QAPI completely due to its
-# "additional arguments" business.  It shouldn't have been added to
-# the schema in this form.  It should be qapified properly, or
-# replaced by a properly qapified command.
-#
-# Since: 0.14.0
+# Since: 0.14
 #
 # Returns: Nothing on success
 #          If @type is not a valid network backend, DeviceNotFound
@@ -64,9 +55,7 @@
 # <- { "return": {} }
 #
 ##
-{ 'command': 'netdev_add',
-  'data': {'type': 'str', 'id': 'str'},
-  'gen': false }                # so we can get the additional arguments
+{ 'command': 'netdev_add', 'data': 'Netdev', 'boxed': true }
 
 ##
 # @netdev_del:
@@ -78,7 +67,7 @@
 # Returns: Nothing on success
 #          If @id is not a valid network backend, DeviceNotFound
 #
-# Since: 0.14.0
+# Since: 0.14
 #
 # Example:
 #
@@ -87,16 +76,6 @@
 #
 ##
 { 'command': 'netdev_del', 'data': {'id': 'str'} }
-
-##
-# @NetdevNoneOptions:
-#
-# Use it alone to have zero network devices.
-#
-# Since: 1.2
-##
-{ 'struct': 'NetdevNoneOptions',
-  'data': { } }
 
 ##
 # @NetLegacyNicOptions:
@@ -160,6 +139,9 @@
 # @dnssearch: list of DNS suffixes to search, passed as DHCP option
 #             to the guest
 #
+# @domainname: guest-visible domain name of the virtual nameserver
+#              (since 3.0)
+#
 # @ipv6-prefix: IPv6 network prefix (default is fec0::) (since
 #               2.6). The network prefix is given in the usual
 #               hexadecimal IPv6 address notation.
@@ -181,6 +163,8 @@
 #
 # @guestfwd: forward guest TCP connections
 #
+# @tftp-server-name: RFC2132 "TFTP server name" string (Since 3.1)
+#
 # Since: 1.2
 ##
 { 'struct': 'NetdevUserOptions',
@@ -197,6 +181,7 @@
     '*dhcpstart': 'str',
     '*dns':       'str',
     '*dnssearch': ['String'],
+    '*domainname': 'str',
     '*ipv6-prefix':      'str',
     '*ipv6-prefixlen':   'int',
     '*ipv6-host':        'str',
@@ -204,19 +189,20 @@
     '*smb':       'str',
     '*smbserver': 'str',
     '*hostfwd':   ['String'],
-    '*guestfwd':  ['String'] } }
+    '*guestfwd':  ['String'],
+    '*tftp-server-name': 'str' } }
 
 ##
 # @NetdevTapOptions:
 #
-# Connect the host TAP network interface name to the VLAN.
+# Used to configure a host TAP network interface backend.
 #
 # @ifname: interface name
 #
 # @fd: file descriptor of an already opened tap
 #
 # @fds: multiple file descriptors of already opened multiqueue capable
-# tap
+#       tap
 #
 # @script: script to initialize the interface
 #
@@ -235,14 +221,14 @@
 # @vhostfd: file descriptor of an already opened vhost net device
 #
 # @vhostfds: file descriptors of multiple already opened vhost net
-# devices
+#            devices
 #
 # @vhostforce: vhost on for non-MSIX virtio guests
 #
 # @queues: number of queues to be created for multiqueue capable tap
 #
 # @poll-us: maximum number of microseconds that could
-# be spent on busy polling for tap (since 2.7)
+#           be spent on busy polling for tap (since 2.7)
 #
 # Since: 1.2
 ##
@@ -267,8 +253,8 @@
 ##
 # @NetdevSocketOptions:
 #
-# Connect the VLAN to a remote VLAN in another QEMU virtual machine using a TCP
-# socket connection.
+# Socket netdevs are used to establish a network connection to another
+# QEMU virtual machine via a TCP socket.
 #
 # @fd: file descriptor of an already opened socket
 #
@@ -296,7 +282,7 @@
 ##
 # @NetdevL2TPv3Options:
 #
-# Connect the VLAN to Ethernet over L2TPv3 Static tunnel
+# Configure an Ethernet over L2TPv3 tunnel.
 #
 # @src: source address
 #
@@ -352,7 +338,7 @@
 ##
 # @NetdevVdeOptions:
 #
-# Connect the VLAN to a vde switch running on the host.
+# Connect to a vde switch running on the host.
 #
 # @sock: socket path
 #
@@ -370,23 +356,6 @@
     '*port':  'uint16',
     '*group': 'str',
     '*mode':  'uint16' } }
-
-##
-# @NetdevDumpOptions:
-#
-# Dump VLAN network traffic to a file.
-#
-# @len: per-packet size limit (64k default). Understands [TGMKkb]
-# suffixes.
-#
-# @file: dump file path (default is qemu-vlan0.pcap)
-#
-# Since: 1.2
-##
-{ 'struct': 'NetdevDumpOptions',
-  'data': {
-    '*len':  'size',
-    '*file': 'str' } }
 
 ##
 # @NetdevBridgeOptions:
@@ -410,12 +379,14 @@
 # Connect two or more net clients through a software hub.
 #
 # @hubid: hub identifier number
+# @netdev: used to connect hub to a netdev instead of a device (since 2.12)
 #
 # Since: 1.2
 ##
 { 'struct': 'NetdevHubPortOptions',
   'data': {
-    'hubid':     'int32' } }
+    'hubid':     'int32',
+    '*netdev':    'str' } }
 
 ##
 # @NetdevNetmapOptions:
@@ -459,15 +430,38 @@
     '*queues':        'int' } }
 
 ##
+# @NetdevVhostVDPAOptions:
+#
+# Vhost-vdpa network backend
+#
+# vDPA device is a device that uses a datapath which complies with the virtio
+# specifications with a vendor specific control path.
+#
+# @vhostdev: path of vhost-vdpa device
+#            (default:'/dev/vhost-vdpa-0')
+#
+# @queues: number of queues to be created for multiqueue vhost-vdpa
+#          (default: 1)
+#
+# Since: 5.1
+##
+{ 'struct': 'NetdevVhostVDPAOptions',
+  'data': {
+    '*vhostdev':     'str',
+    '*queues':       'int' } }
+
+##
 # @NetClientDriver:
 #
 # Available netdev drivers.
 #
 # Since: 2.7
+#
+#        @vhost-vdpa since 5.1
 ##
 { 'enum': 'NetClientDriver',
-  'data': [ 'none', 'nic', 'user', 'tap', 'l2tpv3', 'socket', 'vde', 'dump',
-            'bridge', 'hubport', 'netmap', 'vhost-user' ] }
+  'data': [ 'none', 'nic', 'user', 'tap', 'l2tpv3', 'socket', 'vde',
+            'bridge', 'hubport', 'netmap', 'vhost-user', 'vhost-vdpa' ] }
 
 ##
 # @Netdev:
@@ -480,98 +474,23 @@
 #
 # Since: 1.2
 #
-# 'l2tpv3' - since 2.1
+#        'l2tpv3' - since 2.1
 ##
 { 'union': 'Netdev',
   'base': { 'id': 'str', 'type': 'NetClientDriver' },
   'discriminator': 'type',
   'data': {
-    'none':     'NetdevNoneOptions',
     'nic':      'NetLegacyNicOptions',
     'user':     'NetdevUserOptions',
     'tap':      'NetdevTapOptions',
     'l2tpv3':   'NetdevL2TPv3Options',
     'socket':   'NetdevSocketOptions',
     'vde':      'NetdevVdeOptions',
-    'dump':     'NetdevDumpOptions',
     'bridge':   'NetdevBridgeOptions',
     'hubport':  'NetdevHubPortOptions',
     'netmap':   'NetdevNetmapOptions',
-    'vhost-user': 'NetdevVhostUserOptions' } }
-
-##
-# @NetLegacy:
-#
-# Captures the configuration of a network device; legacy.
-#
-# @vlan: vlan number
-#
-# @id: identifier for monitor commands
-#
-# @name: identifier for monitor commands, ignored if @id is present
-#
-# @opts: device type specific properties (legacy)
-#
-# Since: 1.2
-##
-{ 'struct': 'NetLegacy',
-  'data': {
-    '*vlan': 'int32',
-    '*id':   'str',
-    '*name': 'str',
-    'opts':  'NetLegacyOptions' } }
-
-##
-# @NetLegacyOptionsType:
-#
-# Since: 1.2
-##
-{ 'enum': 'NetLegacyOptionsType',
-  'data': ['none', 'nic', 'user', 'tap', 'l2tpv3', 'socket', 'vde',
-           'dump', 'bridge', 'netmap', 'vhost-user'] }
-
-##
-# @NetLegacyOptions:
-#
-# Like Netdev, but for use only by the legacy command line options
-#
-# Since: 1.2
-##
-{ 'union': 'NetLegacyOptions',
-  'base': { 'type': 'NetLegacyOptionsType' },
-  'discriminator': 'type',
-  'data': {
-    'none':     'NetdevNoneOptions',
-    'nic':      'NetLegacyNicOptions',
-    'user':     'NetdevUserOptions',
-    'tap':      'NetdevTapOptions',
-    'l2tpv3':   'NetdevL2TPv3Options',
-    'socket':   'NetdevSocketOptions',
-    'vde':      'NetdevVdeOptions',
-    'dump':     'NetdevDumpOptions',
-    'bridge':   'NetdevBridgeOptions',
-    'netmap':   'NetdevNetmapOptions',
-    'vhost-user': 'NetdevVhostUserOptions' } }
-
-##
-# @NetFilterDirection:
-#
-# Indicates whether a netfilter is attached to a netdev's transmit queue or
-# receive queue or both.
-#
-# @all: the filter is attached both to the receive and the transmit
-#       queue of the netdev (default).
-#
-# @rx: the filter is attached to the receive queue of the netdev,
-#      where it will receive packets sent to the netdev.
-#
-# @tx: the filter is attached to the transmit queue of the netdev,
-#      where it will receive packets sent by the netdev.
-#
-# Since: 2.5
-##
-{ 'enum': 'NetFilterDirection',
-  'data': [ 'all', 'rx', 'tx' ] }
+    'vhost-user': 'NetdevVhostUserOptions',
+    'vhost-vdpa': 'NetdevVhostVDPAOptions' } }
 
 ##
 # @RxState:
@@ -678,7 +597,8 @@
 #    }
 #
 ##
-{ 'command': 'query-rx-filter', 'data': { '*name': 'str' },
+{ 'command': 'query-rx-filter',
+  'data': { '*name': 'str' },
   'returns': ['RxFilterInfo'] }
 
 ##
@@ -704,3 +624,73 @@
 ##
 { 'event': 'NIC_RX_FILTER_CHANGED',
   'data': { '*name': 'str', 'path': 'str' } }
+
+##
+# @AnnounceParameters:
+#
+# Parameters for self-announce timers
+#
+# @initial: Initial delay (in ms) before sending the first GARP/RARP
+#           announcement
+#
+# @max: Maximum delay (in ms) between GARP/RARP announcement packets
+#
+# @rounds: Number of self-announcement attempts
+#
+# @step: Delay increase (in ms) after each self-announcement attempt
+#
+# @interfaces: An optional list of interface names, which restricts the
+#              announcement to the listed interfaces. (Since 4.1)
+#
+# @id: A name to be used to identify an instance of announce-timers
+#      and to allow it to modified later.  Not for use as
+#      part of the migration parameters. (Since 4.1)
+#
+# Since: 4.0
+##
+
+{ 'struct': 'AnnounceParameters',
+  'data': { 'initial': 'int',
+            'max': 'int',
+            'rounds': 'int',
+            'step': 'int',
+            '*interfaces': ['str'],
+            '*id' : 'str' } }
+
+##
+# @announce-self:
+#
+# Trigger generation of broadcast RARP frames to update network switches.
+# This can be useful when network bonds fail-over the active slave.
+#
+# Example:
+#
+# -> { "execute": "announce-self",
+#      "arguments": {
+#          "initial": 50, "max": 550, "rounds": 10, "step": 50,
+#          "interfaces": ["vn2", "vn3"], "id": "bob" } }
+# <- { "return": {} }
+#
+# Since: 4.0
+##
+{ 'command': 'announce-self', 'boxed': true,
+  'data' : 'AnnounceParameters'}
+
+##
+# @FAILOVER_NEGOTIATED:
+#
+# Emitted when VIRTIO_NET_F_STANDBY was enabled during feature negotiation.
+# Failover primary devices which were hidden (not hotplugged when requested)
+# before will now be hotplugged by the virtio-net standby device.
+#
+# device-id: QEMU device id of the unplugged device
+# Since: 4.2
+#
+# Example:
+#
+# <- { "event": "FAILOVER_NEGOTIATED",
+#      "data": "net1" }
+#
+##
+{ 'event': 'FAILOVER_NEGOTIATED',
+  'data': {'device-id': 'str'} }

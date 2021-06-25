@@ -16,6 +16,25 @@
 #include "hw/s390x/ioinst.h"
 #include "trace.h"
 #include "hw/s390x/s390-pci-bus.h"
+#include "hw/s390x/pv.h"
+
+/* All I/O instructions but chsc use the s format */
+static uint64_t get_address_from_regs(CPUS390XState *env, uint32_t ipb,
+                                      uint8_t *ar)
+{
+    /*
+     * Addresses for protected guests are all offsets into the
+     * satellite block which holds the IO control structures. Those
+     * control structures are always starting at offset 0 and are
+     * always aligned and accessible. So we can return 0 here which
+     * will pass the following address checks.
+     */
+    if (s390_is_pv()) {
+        *ar = 0;
+        return 0;
+    }
+    return decode_basedisp_s(env, ipb, ar);
+}
 
 int ioinst_disassemble_sch_ident(uint32_t value, int *m, int *cssid, int *ssid,
                                  int *schid)
@@ -38,94 +57,58 @@ int ioinst_disassemble_sch_ident(uint32_t value, int *m, int *cssid, int *ssid,
     return 0;
 }
 
-void ioinst_handle_xsch(S390CPU *cpu, uint64_t reg1)
+void ioinst_handle_xsch(S390CPU *cpu, uint64_t reg1, uintptr_t ra)
 {
     int cssid, ssid, schid, m;
     SubchDev *sch;
-    int ret = -ENODEV;
-    int cc;
 
     if (ioinst_disassemble_sch_ident(reg1, &m, &cssid, &ssid, &schid)) {
-        program_interrupt(&cpu->env, PGM_OPERAND, 4);
+        s390_program_interrupt(&cpu->env, PGM_OPERAND, ra);
         return;
     }
     trace_ioinst_sch_id("xsch", cssid, ssid, schid);
     sch = css_find_subch(m, cssid, ssid, schid);
-    if (sch && css_subch_visible(sch)) {
-        ret = css_do_xsch(sch);
+    if (!sch || !css_subch_visible(sch)) {
+        setcc(cpu, 3);
+        return;
     }
-    switch (ret) {
-    case -ENODEV:
-        cc = 3;
-        break;
-    case -EBUSY:
-        cc = 2;
-        break;
-    case 0:
-        cc = 0;
-        break;
-    default:
-        cc = 1;
-        break;
-    }
-    setcc(cpu, cc);
+    setcc(cpu, css_do_xsch(sch));
 }
 
-void ioinst_handle_csch(S390CPU *cpu, uint64_t reg1)
+void ioinst_handle_csch(S390CPU *cpu, uint64_t reg1, uintptr_t ra)
 {
     int cssid, ssid, schid, m;
     SubchDev *sch;
-    int ret = -ENODEV;
-    int cc;
 
     if (ioinst_disassemble_sch_ident(reg1, &m, &cssid, &ssid, &schid)) {
-        program_interrupt(&cpu->env, PGM_OPERAND, 4);
+        s390_program_interrupt(&cpu->env, PGM_OPERAND, ra);
         return;
     }
     trace_ioinst_sch_id("csch", cssid, ssid, schid);
     sch = css_find_subch(m, cssid, ssid, schid);
-    if (sch && css_subch_visible(sch)) {
-        ret = css_do_csch(sch);
+    if (!sch || !css_subch_visible(sch)) {
+        setcc(cpu, 3);
+        return;
     }
-    if (ret == -ENODEV) {
-        cc = 3;
-    } else {
-        cc = 0;
-    }
-    setcc(cpu, cc);
+    setcc(cpu, css_do_csch(sch));
 }
 
-void ioinst_handle_hsch(S390CPU *cpu, uint64_t reg1)
+void ioinst_handle_hsch(S390CPU *cpu, uint64_t reg1, uintptr_t ra)
 {
     int cssid, ssid, schid, m;
     SubchDev *sch;
-    int ret = -ENODEV;
-    int cc;
 
     if (ioinst_disassemble_sch_ident(reg1, &m, &cssid, &ssid, &schid)) {
-        program_interrupt(&cpu->env, PGM_OPERAND, 4);
+        s390_program_interrupt(&cpu->env, PGM_OPERAND, ra);
         return;
     }
     trace_ioinst_sch_id("hsch", cssid, ssid, schid);
     sch = css_find_subch(m, cssid, ssid, schid);
-    if (sch && css_subch_visible(sch)) {
-        ret = css_do_hsch(sch);
+    if (!sch || !css_subch_visible(sch)) {
+        setcc(cpu, 3);
+        return;
     }
-    switch (ret) {
-    case -ENODEV:
-        cc = 3;
-        break;
-    case -EBUSY:
-        cc = 2;
-        break;
-    case 0:
-        cc = 0;
-        break;
-    default:
-        cc = 1;
-        break;
-    }
-    setcc(cpu, cc);
+    setcc(cpu, css_do_hsch(sch));
 }
 
 static int ioinst_schib_valid(SCHIB *schib)
@@ -138,53 +121,47 @@ static int ioinst_schib_valid(SCHIB *schib)
     if (be32_to_cpu(schib->pmcw.chars) & PMCW_CHARS_MASK_XMWME) {
         return 0;
     }
+    /* for MB format 1 bits 26-31 of word 11 must be 0 */
+    /* MBA uses words 10 and 11, it means align on 2**6 */
+    if ((be16_to_cpu(schib->pmcw.chars) & PMCW_CHARS_MASK_MBFC) &&
+        (be64_to_cpu(schib->mba) & 0x03fUL)) {
+        return 0;
+    }
     return 1;
 }
 
-void ioinst_handle_msch(S390CPU *cpu, uint64_t reg1, uint32_t ipb)
+void ioinst_handle_msch(S390CPU *cpu, uint64_t reg1, uint32_t ipb, uintptr_t ra)
 {
     int cssid, ssid, schid, m;
     SubchDev *sch;
     SCHIB schib;
     uint64_t addr;
-    int ret = -ENODEV;
-    int cc;
     CPUS390XState *env = &cpu->env;
     uint8_t ar;
 
-    addr = decode_basedisp_s(env, ipb, &ar);
+    addr = get_address_from_regs(env, ipb, &ar);
     if (addr & 3) {
-        program_interrupt(env, PGM_SPECIFICATION, 4);
+        s390_program_interrupt(env, PGM_SPECIFICATION, ra);
         return;
     }
-    if (s390_cpu_virt_mem_read(cpu, addr, ar, &schib, sizeof(schib))) {
+    if (s390_is_pv()) {
+        s390_cpu_pv_mem_read(cpu, addr, &schib, sizeof(schib));
+    } else if (s390_cpu_virt_mem_read(cpu, addr, ar, &schib, sizeof(schib))) {
+        s390_cpu_virt_mem_handle_exc(cpu, ra);
         return;
     }
     if (ioinst_disassemble_sch_ident(reg1, &m, &cssid, &ssid, &schid) ||
         !ioinst_schib_valid(&schib)) {
-        program_interrupt(env, PGM_OPERAND, 4);
+        s390_program_interrupt(env, PGM_OPERAND, ra);
         return;
     }
     trace_ioinst_sch_id("msch", cssid, ssid, schid);
     sch = css_find_subch(m, cssid, ssid, schid);
-    if (sch && css_subch_visible(sch)) {
-        ret = css_do_msch(sch, &schib);
+    if (!sch || !css_subch_visible(sch)) {
+        setcc(cpu, 3);
+        return;
     }
-    switch (ret) {
-    case -ENODEV:
-        cc = 3;
-        break;
-    case -EBUSY:
-        cc = 2;
-        break;
-    case 0:
-        cc = 0;
-        break;
-    default:
-        cc = 1;
-        break;
-    }
-    setcc(cpu, cc);
+    setcc(cpu, css_do_msch(sch, &schib));
 }
 
 static void copy_orb_from_guest(ORB *dest, const ORB *src)
@@ -212,63 +189,42 @@ static int ioinst_orb_valid(ORB *orb)
     return 1;
 }
 
-void ioinst_handle_ssch(S390CPU *cpu, uint64_t reg1, uint32_t ipb)
+void ioinst_handle_ssch(S390CPU *cpu, uint64_t reg1, uint32_t ipb, uintptr_t ra)
 {
     int cssid, ssid, schid, m;
     SubchDev *sch;
     ORB orig_orb, orb;
     uint64_t addr;
-    int ret = -ENODEV;
-    int cc;
     CPUS390XState *env = &cpu->env;
     uint8_t ar;
 
-    addr = decode_basedisp_s(env, ipb, &ar);
+    addr = get_address_from_regs(env, ipb, &ar);
     if (addr & 3) {
-        program_interrupt(env, PGM_SPECIFICATION, 4);
+        s390_program_interrupt(env, PGM_SPECIFICATION, ra);
         return;
     }
-    if (s390_cpu_virt_mem_read(cpu, addr, ar, &orig_orb, sizeof(orb))) {
+    if (s390_is_pv()) {
+        s390_cpu_pv_mem_read(cpu, addr, &orig_orb, sizeof(orb));
+    } else if (s390_cpu_virt_mem_read(cpu, addr, ar, &orig_orb, sizeof(orb))) {
+        s390_cpu_virt_mem_handle_exc(cpu, ra);
         return;
     }
     copy_orb_from_guest(&orb, &orig_orb);
     if (ioinst_disassemble_sch_ident(reg1, &m, &cssid, &ssid, &schid) ||
         !ioinst_orb_valid(&orb)) {
-        program_interrupt(env, PGM_OPERAND, 4);
+        s390_program_interrupt(env, PGM_OPERAND, ra);
         return;
     }
     trace_ioinst_sch_id("ssch", cssid, ssid, schid);
     sch = css_find_subch(m, cssid, ssid, schid);
-    if (sch && css_subch_visible(sch)) {
-        ret = css_do_ssch(sch, &orb);
-    }
-    switch (ret) {
-    case -ENODEV:
-        cc = 3;
-        break;
-    case -EBUSY:
-        cc = 2;
-        break;
-    case -EFAULT:
-        /*
-         * TODO:
-         * I'm wondering whether there is something better
-         * to do for us here (like setting some device or
-         * subchannel status).
-         */
-        program_interrupt(env, PGM_ADDRESSING, 4);
+    if (!sch || !css_subch_visible(sch)) {
+        setcc(cpu, 3);
         return;
-    case 0:
-        cc = 0;
-        break;
-    default:
-        cc = 1;
-        break;
     }
-    setcc(cpu, cc);
+    setcc(cpu, css_do_ssch(sch, &orb));
 }
 
-void ioinst_handle_stcrw(S390CPU *cpu, uint32_t ipb)
+void ioinst_handle_stcrw(S390CPU *cpu, uint32_t ipb, uintptr_t ra)
 {
     CRW crw;
     uint64_t addr;
@@ -276,24 +232,33 @@ void ioinst_handle_stcrw(S390CPU *cpu, uint32_t ipb)
     CPUS390XState *env = &cpu->env;
     uint8_t ar;
 
-    addr = decode_basedisp_s(env, ipb, &ar);
+    addr = get_address_from_regs(env, ipb, &ar);
     if (addr & 3) {
-        program_interrupt(env, PGM_SPECIFICATION, 4);
+        s390_program_interrupt(env, PGM_SPECIFICATION, ra);
         return;
     }
 
     cc = css_do_stcrw(&crw);
     /* 0 - crw stored, 1 - zeroes stored */
 
-    if (s390_cpu_virt_mem_write(cpu, addr, ar, &crw, sizeof(crw)) == 0) {
+    if (s390_is_pv()) {
+        s390_cpu_pv_mem_write(cpu, addr, &crw, sizeof(crw));
         setcc(cpu, cc);
-    } else if (cc == 0) {
-        /* Write failed: requeue CRW since STCRW is a suppressing instruction */
-        css_undo_stcrw(&crw);
+    } else {
+        if (s390_cpu_virt_mem_write(cpu, addr, ar, &crw, sizeof(crw)) == 0) {
+            setcc(cpu, cc);
+        } else {
+            if (cc == 0) {
+                /* Write failed: requeue CRW since STCRW is suppressing */
+                css_undo_stcrw(&crw);
+            }
+            s390_cpu_virt_mem_handle_exc(cpu, ra);
+        }
     }
 }
 
-void ioinst_handle_stsch(S390CPU *cpu, uint64_t reg1, uint32_t ipb)
+void ioinst_handle_stsch(S390CPU *cpu, uint64_t reg1, uint32_t ipb,
+                         uintptr_t ra)
 {
     int cssid, ssid, schid, m;
     SubchDev *sch;
@@ -303,20 +268,29 @@ void ioinst_handle_stsch(S390CPU *cpu, uint64_t reg1, uint32_t ipb)
     CPUS390XState *env = &cpu->env;
     uint8_t ar;
 
-    addr = decode_basedisp_s(env, ipb, &ar);
+    addr = get_address_from_regs(env, ipb, &ar);
     if (addr & 3) {
-        program_interrupt(env, PGM_SPECIFICATION, 4);
+        s390_program_interrupt(env, PGM_SPECIFICATION, ra);
         return;
     }
 
     if (ioinst_disassemble_sch_ident(reg1, &m, &cssid, &ssid, &schid)) {
+        /*
+         * The Ultravisor checks schid bit 16 to be one and bits 0-12
+         * to be 0 and injects a operand exception itself.
+         *
+         * Hence we should never end up here.
+         */
+        g_assert(!s390_is_pv());
         /*
          * As operand exceptions have a lower priority than access exceptions,
          * we check whether the memory area is writeable (injecting the
          * access execption if it is not) first.
          */
         if (!s390_cpu_virt_mem_check_write(cpu, addr, ar, sizeof(schib))) {
-            program_interrupt(env, PGM_OPERAND, 4);
+            s390_program_interrupt(env, PGM_OPERAND, ra);
+        } else {
+            s390_cpu_virt_mem_handle_exc(cpu, ra);
         }
         return;
     }
@@ -324,8 +298,7 @@ void ioinst_handle_stsch(S390CPU *cpu, uint64_t reg1, uint32_t ipb)
     sch = css_find_subch(m, cssid, ssid, schid);
     if (sch) {
         if (css_subch_visible(sch)) {
-            css_do_stsch(sch, &schib);
-            cc = 0;
+            cc = css_do_stsch(sch, &schib);
         } else {
             /* Indicate no more subchannels in this css/ss */
             cc = 3;
@@ -340,20 +313,25 @@ void ioinst_handle_stsch(S390CPU *cpu, uint64_t reg1, uint32_t ipb)
         }
     }
     if (cc != 3) {
-        if (s390_cpu_virt_mem_write(cpu, addr, ar, &schib,
-                                    sizeof(schib)) != 0) {
+        if (s390_is_pv()) {
+            s390_cpu_pv_mem_write(cpu, addr, &schib, sizeof(schib));
+        } else if (s390_cpu_virt_mem_write(cpu, addr, ar, &schib,
+                                           sizeof(schib)) != 0) {
+            s390_cpu_virt_mem_handle_exc(cpu, ra);
             return;
         }
     } else {
         /* Access exceptions have a higher priority than cc3 */
-        if (s390_cpu_virt_mem_check_write(cpu, addr, ar, sizeof(schib)) != 0) {
+        if (!s390_is_pv() &&
+            s390_cpu_virt_mem_check_write(cpu, addr, ar, sizeof(schib)) != 0) {
+            s390_cpu_virt_mem_handle_exc(cpu, ra);
             return;
         }
     }
     setcc(cpu, cc);
 }
 
-int ioinst_handle_tsch(S390CPU *cpu, uint64_t reg1, uint32_t ipb)
+int ioinst_handle_tsch(S390CPU *cpu, uint64_t reg1, uint32_t ipb, uintptr_t ra)
 {
     CPUS390XState *env = &cpu->env;
     int cssid, ssid, schid, m;
@@ -364,13 +342,13 @@ int ioinst_handle_tsch(S390CPU *cpu, uint64_t reg1, uint32_t ipb)
     uint8_t ar;
 
     if (ioinst_disassemble_sch_ident(reg1, &m, &cssid, &ssid, &schid)) {
-        program_interrupt(env, PGM_OPERAND, 4);
+        s390_program_interrupt(env, PGM_OPERAND, ra);
         return -EIO;
     }
     trace_ioinst_sch_id("tsch", cssid, ssid, schid);
-    addr = decode_basedisp_s(env, ipb, &ar);
+    addr = get_address_from_regs(env, ipb, &ar);
     if (addr & 3) {
-        program_interrupt(env, PGM_SPECIFICATION, 4);
+        s390_program_interrupt(env, PGM_SPECIFICATION, ra);
         return -EIO;
     }
 
@@ -382,14 +360,19 @@ int ioinst_handle_tsch(S390CPU *cpu, uint64_t reg1, uint32_t ipb)
     }
     /* 0 - status pending, 1 - not status pending, 3 - not operational */
     if (cc != 3) {
-        if (s390_cpu_virt_mem_write(cpu, addr, ar, &irb, irb_len) != 0) {
+        if (s390_is_pv()) {
+            s390_cpu_pv_mem_write(cpu, addr, &irb, irb_len);
+        } else if (s390_cpu_virt_mem_write(cpu, addr, ar, &irb, irb_len) != 0) {
+            s390_cpu_virt_mem_handle_exc(cpu, ra);
             return -EFAULT;
         }
         css_do_tsch_update_subch(sch);
     } else {
         irb_len = sizeof(irb) - sizeof(irb.emw);
         /* Access exceptions have a higher priority than cc3 */
-        if (s390_cpu_virt_mem_check_write(cpu, addr, ar, irb_len) != 0) {
+        if (!s390_is_pv() &&
+            s390_cpu_virt_mem_check_write(cpu, addr, ar, irb_len) != 0) {
+            s390_cpu_virt_mem_handle_exc(cpu, ra);
             return -EFAULT;
         }
     }
@@ -410,7 +393,7 @@ typedef struct ChscResp {
     uint16_t len;
     uint16_t code;
     uint32_t param;
-    char data[0];
+    char data[];
 } QEMU_PACKED ChscResp;
 
 #define CHSC_MIN_RESP_LEN 0x0008
@@ -660,11 +643,11 @@ static void ioinst_handle_chsc_unimplemented(ChscResp *res)
     res->param = 0;
 }
 
-void ioinst_handle_chsc(S390CPU *cpu, uint32_t ipb)
+void ioinst_handle_chsc(S390CPU *cpu, uint32_t ipb, uintptr_t ra)
 {
     ChscReq *req;
     ChscResp *res;
-    uint64_t addr;
+    uint64_t addr = 0;
     int reg;
     uint16_t len;
     uint16_t command;
@@ -673,10 +656,12 @@ void ioinst_handle_chsc(S390CPU *cpu, uint32_t ipb)
 
     trace_ioinst("chsc");
     reg = (ipb >> 20) & 0x00f;
-    addr = env->regs[reg];
+    if (!s390_is_pv()) {
+        addr = env->regs[reg];
+    }
     /* Page boundary? */
     if (addr & 0xfff) {
-        program_interrupt(env, PGM_SPECIFICATION, 4);
+        s390_program_interrupt(env, PGM_SPECIFICATION, ra);
         return;
     }
     /*
@@ -684,14 +669,17 @@ void ioinst_handle_chsc(S390CPU *cpu, uint32_t ipb)
      * present CHSC sub-handlers ... if we ever need more, we should take
      * care of req->len here first.
      */
-    if (s390_cpu_virt_mem_read(cpu, addr, reg, buf, sizeof(ChscReq))) {
+    if (s390_is_pv()) {
+        s390_cpu_pv_mem_read(cpu, addr, buf, sizeof(ChscReq));
+    } else if (s390_cpu_virt_mem_read(cpu, addr, reg, buf, sizeof(ChscReq))) {
+        s390_cpu_virt_mem_handle_exc(cpu, ra);
         return;
     }
     req = (ChscReq *)buf;
     len = be16_to_cpu(req->len);
     /* Length field valid? */
     if ((len < 16) || (len > 4088) || (len & 7)) {
-        program_interrupt(env, PGM_OPERAND, 4);
+        s390_program_interrupt(env, PGM_OPERAND, ra);
         return;
     }
     memset((char *)req + len, 0, TARGET_PAGE_SIZE - len);
@@ -716,36 +704,17 @@ void ioinst_handle_chsc(S390CPU *cpu, uint32_t ipb)
         break;
     }
 
-    if (!s390_cpu_virt_mem_write(cpu, addr + len, reg, res,
-                                 be16_to_cpu(res->len))) {
+    if (s390_is_pv()) {
+        s390_cpu_pv_mem_write(cpu, addr + len, res, be16_to_cpu(res->len));
         setcc(cpu, 0);    /* Command execution complete */
+    } else {
+        if (!s390_cpu_virt_mem_write(cpu, addr + len, reg, res,
+                                     be16_to_cpu(res->len))) {
+            setcc(cpu, 0);    /* Command execution complete */
+        } else {
+            s390_cpu_virt_mem_handle_exc(cpu, ra);
+        }
     }
-}
-
-int ioinst_handle_tpi(S390CPU *cpu, uint32_t ipb)
-{
-    CPUS390XState *env = &cpu->env;
-    uint64_t addr;
-    int lowcore;
-    IOIntCode int_code;
-    hwaddr len;
-    int ret;
-    uint8_t ar;
-
-    trace_ioinst("tpi");
-    addr = decode_basedisp_s(env, ipb, &ar);
-    if (addr & 3) {
-        program_interrupt(env, PGM_SPECIFICATION, 4);
-        return -EIO;
-    }
-
-    lowcore = addr ? 0 : 1;
-    len = lowcore ? 8 /* two words */ : 12 /* three words */;
-    ret = css_do_tpi(&int_code, lowcore);
-    if (ret == 1) {
-        s390_cpu_virt_mem_write(cpu, lowcore ? 184 : addr, ar, &int_code, len);
-    }
-    return ret;
 }
 
 #define SCHM_REG1_RES(_reg) (_reg & 0x000000000ffffffc)
@@ -754,7 +723,7 @@ int ioinst_handle_tpi(S390CPU *cpu, uint32_t ipb)
 #define SCHM_REG1_DCT(_reg) (_reg & 0x0000000000000001)
 
 void ioinst_handle_schm(S390CPU *cpu, uint64_t reg1, uint64_t reg2,
-                        uint32_t ipb)
+                        uint32_t ipb, uintptr_t ra)
 {
     uint8_t mbk;
     int update;
@@ -764,7 +733,7 @@ void ioinst_handle_schm(S390CPU *cpu, uint64_t reg1, uint64_t reg2,
     trace_ioinst("schm");
 
     if (SCHM_REG1_RES(reg1)) {
-        program_interrupt(env, PGM_OPERAND, 4);
+        s390_program_interrupt(env, PGM_OPERAND, ra);
         return;
     }
 
@@ -773,50 +742,35 @@ void ioinst_handle_schm(S390CPU *cpu, uint64_t reg1, uint64_t reg2,
     dct = SCHM_REG1_DCT(reg1);
 
     if (update && (reg2 & 0x000000000000001f)) {
-        program_interrupt(env, PGM_OPERAND, 4);
+        s390_program_interrupt(env, PGM_OPERAND, ra);
         return;
     }
 
     css_do_schm(mbk, update, dct, update ? reg2 : 0);
 }
 
-void ioinst_handle_rsch(S390CPU *cpu, uint64_t reg1)
+void ioinst_handle_rsch(S390CPU *cpu, uint64_t reg1, uintptr_t ra)
 {
     int cssid, ssid, schid, m;
     SubchDev *sch;
-    int ret = -ENODEV;
-    int cc;
 
     if (ioinst_disassemble_sch_ident(reg1, &m, &cssid, &ssid, &schid)) {
-        program_interrupt(&cpu->env, PGM_OPERAND, 4);
+        s390_program_interrupt(&cpu->env, PGM_OPERAND, ra);
         return;
     }
     trace_ioinst_sch_id("rsch", cssid, ssid, schid);
     sch = css_find_subch(m, cssid, ssid, schid);
-    if (sch && css_subch_visible(sch)) {
-        ret = css_do_rsch(sch);
+    if (!sch || !css_subch_visible(sch)) {
+        setcc(cpu, 3);
+        return;
     }
-    switch (ret) {
-    case -ENODEV:
-        cc = 3;
-        break;
-    case -EINVAL:
-        cc = 2;
-        break;
-    case 0:
-        cc = 0;
-        break;
-    default:
-        cc = 1;
-        break;
-    }
-    setcc(cpu, cc);
+    setcc(cpu, css_do_rsch(sch));
 }
 
 #define RCHP_REG1_RES(_reg) (_reg & 0x00000000ff00ff00)
 #define RCHP_REG1_CSSID(_reg) ((_reg & 0x0000000000ff0000) >> 16)
 #define RCHP_REG1_CHPID(_reg) (_reg & 0x00000000000000ff)
-void ioinst_handle_rchp(S390CPU *cpu, uint64_t reg1)
+void ioinst_handle_rchp(S390CPU *cpu, uint64_t reg1, uintptr_t ra)
 {
     int cc;
     uint8_t cssid;
@@ -825,7 +779,7 @@ void ioinst_handle_rchp(S390CPU *cpu, uint64_t reg1)
     CPUS390XState *env = &cpu->env;
 
     if (RCHP_REG1_RES(reg1)) {
-        program_interrupt(env, PGM_OPERAND, 4);
+        s390_program_interrupt(env, PGM_OPERAND, ra);
         return;
     }
 
@@ -848,17 +802,17 @@ void ioinst_handle_rchp(S390CPU *cpu, uint64_t reg1)
         break;
     default:
         /* Invalid channel subsystem. */
-        program_interrupt(env, PGM_OPERAND, 4);
+        s390_program_interrupt(env, PGM_OPERAND, ra);
         return;
     }
     setcc(cpu, cc);
 }
 
 #define SAL_REG1_INVALID(_reg) (_reg & 0x0000000080000000)
-void ioinst_handle_sal(S390CPU *cpu, uint64_t reg1)
+void ioinst_handle_sal(S390CPU *cpu, uint64_t reg1, uintptr_t ra)
 {
     /* We do not provide address limit checking, so let's suppress it. */
     if (SAL_REG1_INVALID(reg1) || reg1 & 0x000000000000ffff) {
-        program_interrupt(&cpu->env, PGM_OPERAND, 4);
+        s390_program_interrupt(&cpu->env, PGM_OPERAND, ra);
     }
 }

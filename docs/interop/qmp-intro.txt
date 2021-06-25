@@ -18,7 +18,7 @@ For detailed information on QMP's usage, please, refer to the following files:
 o qmp-spec.txt      QEMU Machine Protocol current specification
 o qemu-qmp-ref.html QEMU QMP commands and events (auto-generated at build-time)
 
-[1] http://www.json.org
+[1] https://www.json.org
 
 Usage
 -----
@@ -26,7 +26,7 @@ Usage
 You can use the -qmp option to enable QMP. For example, the following
 makes QMP available on localhost port 4444:
 
-$ qemu [...] -qmp tcp:localhost:4444,server,nowait
+$ qemu [...] -qmp tcp:localhost:4444,server=on,wait=off
 
 However, for more flexibility and to make use of more options, the -mon
 command-line option should be used. For instance, the following example
@@ -34,7 +34,7 @@ creates one HMP instance (human monitor) on stdio and one QMP instance
 on localhost port 4444:
 
 $ qemu [...] -chardev stdio,id=mon0 -mon chardev=mon0,mode=readline \
-             -chardev socket,id=mon1,host=localhost,port=4444,server,nowait \
+             -chardev socket,id=mon1,host=localhost,port=4444,server=on,wait=off \
              -mon chardev=mon1,mode=control,pretty=on
 
 Please, refer to QEMU's manpage for more information.
@@ -52,13 +52,14 @@ Escape character is '^]'.
     "QMP": {
         "version": {
             "qemu": {
-                "micro": 50, 
-                "minor": 6, 
-                "major": 1
-            }, 
-            "package": ""
-        }, 
+                "micro": 0,
+                "minor": 0,
+                "major": 3
+            },
+            "package": "v3.0.0"
+        },
         "capabilities": [
+            "oob"
         ]
     }
 }
@@ -78,9 +79,10 @@ Escape character is '^]'.
     }
 }
 
-Please, refer to the qapi-schema.json file for a complete command reference.
+Please refer to docs/interop/qemu-qmp-ref.* for a complete command
+reference, generated from qapi/qapi-schema.json.
 
 QMP wiki page
 -------------
 
-http://wiki.qemu-project.org/QMP
+https://wiki.qemu.org/QMP

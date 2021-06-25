@@ -10,16 +10,20 @@
  * (at your option) any later version.  See the COPYING file in the
  * top-level directory.
  */
+
 #include "qemu/osdep.h"
 #include "qemu/iov.h"
-#include "hw/qdev.h"
+#include "qemu/main-loop.h"
+#include "qemu/module.h"
 #include "qapi/error.h"
 #include "qemu/error-report.h"
 
 #include "hw/virtio/virtio.h"
 #include "hw/virtio/virtio-crypto.h"
+#include "hw/qdev-properties.h"
 #include "hw/virtio/virtio-access.h"
 #include "standard-headers/linux/virtio_ids.h"
+#include "sysemu/cryptodev-vhost.h"
 
 #define VIRTIO_CRYPTO_VM_VERSION 1
 
@@ -224,6 +228,8 @@ static void virtio_crypto_handle_ctrl(VirtIODevice *vdev, VirtQueue *vq)
     size_t s;
 
     for (;;) {
+        g_autofree struct iovec *out_iov_copy = NULL;
+
         elem = virtqueue_pop(vq, sizeof(VirtQueueElement));
         if (!elem) {
             break;
@@ -236,9 +242,12 @@ static void virtio_crypto_handle_ctrl(VirtIODevice *vdev, VirtQueue *vq)
         }
 
         out_num = elem->out_num;
-        out_iov = elem->out_sg;
+        out_iov_copy = g_memdup(elem->out_sg, sizeof(out_iov[0]) * out_num);
+        out_iov = out_iov_copy;
+
         in_num = elem->in_num;
         in_iov = elem->in_sg;
+
         if (unlikely(iov_to_buf(out_iov, out_num, 0, &ctrl, sizeof(ctrl))
                     != sizeof(ctrl))) {
             virtio_error(vdev, "virtio-crypto request ctrl_hdr too short");
@@ -578,6 +587,8 @@ virtio_crypto_handle_request(VirtIOCryptoReq *request)
     int queue_index = virtio_crypto_vq2q(virtio_get_queue_index(request->vq));
     struct virtio_crypto_op_data_req req;
     int ret;
+    g_autofree struct iovec *in_iov_copy = NULL;
+    g_autofree struct iovec *out_iov_copy = NULL;
     struct iovec *in_iov;
     struct iovec *out_iov;
     unsigned in_num;
@@ -594,9 +605,13 @@ virtio_crypto_handle_request(VirtIOCryptoReq *request)
     }
 
     out_num = elem->out_num;
-    out_iov = elem->out_sg;
+    out_iov_copy = g_memdup(elem->out_sg, sizeof(out_iov[0]) * out_num);
+    out_iov = out_iov_copy;
+
     in_num = elem->in_num;
-    in_iov = elem->in_sg;
+    in_iov_copy = g_memdup(elem->in_sg, sizeof(in_iov[0]) * in_num);
+    in_iov = in_iov_copy;
+
     if (unlikely(iov_to_buf(out_iov, out_num, 0, &req, sizeof(req))
                 != sizeof(req))) {
         virtio_error(vdev, "virtio-crypto request outhdr too short");
@@ -782,9 +797,8 @@ static void virtio_crypto_device_realize(DeviceState *dev, Error **errp)
         error_setg(errp, "'cryptodev' parameter expects a valid object");
         return;
     } else if (cryptodev_backend_is_used(vcrypto->cryptodev)) {
-        char *path = object_get_canonical_path_component(OBJECT(vcrypto->conf.cryptodev));
-        error_setg(errp, "can't use already used cryptodev backend: %s", path);
-        g_free(path);
+        error_setg(errp, "can't use already used cryptodev backend: %s",
+                   object_get_canonical_path_component(OBJECT(vcrypto->conf.cryptodev)));
         return;
     }
 
@@ -818,7 +832,7 @@ static void virtio_crypto_device_realize(DeviceState *dev, Error **errp)
     cryptodev_backend_set_used(vcrypto->cryptodev, true);
 }
 
-static void virtio_crypto_device_unrealize(DeviceState *dev, Error **errp)
+static void virtio_crypto_device_unrealize(DeviceState *dev)
 {
     VirtIODevice *vdev = VIRTIO_DEVICE(dev);
     VirtIOCrypto *vcrypto = VIRTIO_CRYPTO(dev);
@@ -827,12 +841,13 @@ static void virtio_crypto_device_unrealize(DeviceState *dev, Error **errp)
 
     max_queues = vcrypto->multiqueue ? vcrypto->max_queues : 1;
     for (i = 0; i < max_queues; i++) {
-        virtio_del_queue(vdev, i);
+        virtio_delete_queue(vcrypto->vqs[i].dataq);
         q = &vcrypto->vqs[i];
         qemu_bh_delete(q->dataq_bh);
     }
 
     g_free(vcrypto->vqs);
+    virtio_delete_queue(vcrypto->ctrl_vq);
 
     virtio_cleanup(vdev);
     cryptodev_backend_set_used(vcrypto->cryptodev, false);
@@ -880,12 +895,78 @@ static void virtio_crypto_get_config(VirtIODevice *vdev, uint8_t *config)
     memcpy(config, &crypto_cfg, c->config_size);
 }
 
+static bool virtio_crypto_started(VirtIOCrypto *c, uint8_t status)
+{
+    VirtIODevice *vdev = VIRTIO_DEVICE(c);
+    return (status & VIRTIO_CONFIG_S_DRIVER_OK) &&
+        (c->status & VIRTIO_CRYPTO_S_HW_READY) && vdev->vm_running;
+}
+
+static void virtio_crypto_vhost_status(VirtIOCrypto *c, uint8_t status)
+{
+    VirtIODevice *vdev = VIRTIO_DEVICE(c);
+    int queues = c->multiqueue ? c->max_queues : 1;
+    CryptoDevBackend *b = c->cryptodev;
+    CryptoDevBackendClient *cc = b->conf.peers.ccs[0];
+
+    if (!cryptodev_get_vhost(cc, b, 0)) {
+        return;
+    }
+
+    if ((virtio_crypto_started(c, status)) == !!c->vhost_started) {
+        return;
+    }
+
+    if (!c->vhost_started) {
+        int r;
+
+        c->vhost_started = 1;
+        r = cryptodev_vhost_start(vdev, queues);
+        if (r < 0) {
+            error_report("unable to start vhost crypto: %d: "
+                         "falling back on userspace virtio", -r);
+            c->vhost_started = 0;
+        }
+    } else {
+        cryptodev_vhost_stop(vdev, queues);
+        c->vhost_started = 0;
+    }
+}
+
+static void virtio_crypto_set_status(VirtIODevice *vdev, uint8_t status)
+{
+    VirtIOCrypto *vcrypto = VIRTIO_CRYPTO(vdev);
+
+    virtio_crypto_vhost_status(vcrypto, status);
+}
+
+static void virtio_crypto_guest_notifier_mask(VirtIODevice *vdev, int idx,
+                                           bool mask)
+{
+    VirtIOCrypto *vcrypto = VIRTIO_CRYPTO(vdev);
+    int queue = virtio_crypto_vq2q(idx);
+
+    assert(vcrypto->vhost_started);
+
+    cryptodev_vhost_virtqueue_mask(vdev, queue, idx, mask);
+}
+
+static bool virtio_crypto_guest_notifier_pending(VirtIODevice *vdev, int idx)
+{
+    VirtIOCrypto *vcrypto = VIRTIO_CRYPTO(vdev);
+    int queue = virtio_crypto_vq2q(idx);
+
+    assert(vcrypto->vhost_started);
+
+    return cryptodev_vhost_virtqueue_pending(vdev, queue, idx);
+}
+
 static void virtio_crypto_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
     VirtioDeviceClass *vdc = VIRTIO_DEVICE_CLASS(klass);
 
-    dc->props = virtio_crypto_properties;
+    device_class_set_props(dc, virtio_crypto_properties);
     dc->vmsd = &vmstate_virtio_crypto;
     set_bit(DEVICE_CATEGORY_MISC, dc->categories);
     vdc->realize = virtio_crypto_device_realize;
@@ -893,6 +974,9 @@ static void virtio_crypto_class_init(ObjectClass *klass, void *data)
     vdc->get_config = virtio_crypto_get_config;
     vdc->get_features = virtio_crypto_get_features;
     vdc->reset = virtio_crypto_reset;
+    vdc->set_status = virtio_crypto_set_status;
+    vdc->guest_notifier_mask = virtio_crypto_guest_notifier_mask;
+    vdc->guest_notifier_pending = virtio_crypto_guest_notifier_pending;
 }
 
 static void virtio_crypto_instance_init(Object *obj)

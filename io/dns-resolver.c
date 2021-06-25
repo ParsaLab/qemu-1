@@ -6,7 +6,7 @@
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2 of the License, or (at your option) any later version.
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -21,9 +21,11 @@
 #include "qemu/osdep.h"
 #include "io/dns-resolver.h"
 #include "qapi/clone-visitor.h"
+#include "qapi/qapi-visit-sockets.h"
 #include "qemu/sockets.h"
 #include "qapi/error.h"
 #include "qemu/cutils.h"
+#include "qemu/module.h"
 
 #ifndef AI_NUMERICSERV
 # define AI_NUMERICSERV 0
@@ -233,7 +235,8 @@ void qio_dns_resolver_lookup_async(QIODNSResolver *resolver,
     qio_task_run_in_thread(task,
                            qio_dns_resolver_lookup_worker,
                            data,
-                           qio_dns_resolver_lookup_data_free);
+                           qio_dns_resolver_lookup_data_free,
+                           NULL);
 }
 
 
@@ -264,7 +267,6 @@ static const TypeInfo qio_dns_resolver_info = {
     .parent = TYPE_OBJECT,
     .name = TYPE_QIO_DNS_RESOLVER,
     .instance_size = sizeof(QIODNSResolver),
-    .class_size = sizeof(QIODNSResolverClass),
 };
 
 
