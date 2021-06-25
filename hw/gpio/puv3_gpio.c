@@ -8,17 +8,20 @@
  * published by the Free Software Foundation, or any later version.
  * See the COPYING file in the top-level directory.
  */
+
 #include "qemu/osdep.h"
-#include "hw/hw.h"
 #include "hw/sysbus.h"
+#include "qom/object.h"
 
 #undef DEBUG_PUV3
 #include "hw/unicore32/puv3.h"
+#include "qemu/module.h"
+#include "qemu/log.h"
 
 #define TYPE_PUV3_GPIO "puv3_gpio"
-#define PUV3_GPIO(obj) OBJECT_CHECK(PUV3GPIOState, (obj), TYPE_PUV3_GPIO)
+OBJECT_DECLARE_SIMPLE_TYPE(PUV3GPIOState, PUV3_GPIO)
 
-typedef struct PUV3GPIOState {
+struct PUV3GPIOState {
     SysBusDevice parent_obj;
 
     MemoryRegion iomem;
@@ -27,7 +30,7 @@ typedef struct PUV3GPIOState {
     uint32_t reg_GPLR;
     uint32_t reg_GPDR;
     uint32_t reg_GPIR;
-} PUV3GPIOState;
+};
 
 static uint64_t puv3_gpio_read(void *opaque, hwaddr offset,
         unsigned size)
@@ -46,7 +49,9 @@ static uint64_t puv3_gpio_read(void *opaque, hwaddr offset,
         ret = s->reg_GPIR;
         break;
     default:
-        DPRINTF("Bad offset 0x%x\n", offset);
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "%s: Bad read offset 0x%"HWADDR_PRIx"\n",
+                      __func__, offset);
     }
     DPRINTF("offset 0x%x, value 0x%x\n", offset, ret);
 
@@ -67,14 +72,16 @@ static void puv3_gpio_write(void *opaque, hwaddr offset,
         if (s->reg_GPDR & value) {
             s->reg_GPLR |= value;
         } else {
-            DPRINTF("Write gpio input port error!");
+            qemu_log_mask(LOG_GUEST_ERROR, "%s: Write gpio input port\n",
+                          __func__);
         }
         break;
     case 0x0c:
         if (s->reg_GPDR & value) {
             s->reg_GPLR &= ~value;
         } else {
-            DPRINTF("Write gpio input port error!");
+            qemu_log_mask(LOG_GUEST_ERROR, "%s: Write gpio input port\n",
+                          __func__);
         }
         break;
     case 0x10: /* GRER */
@@ -85,7 +92,9 @@ static void puv3_gpio_write(void *opaque, hwaddr offset,
         s->reg_GPIR = value;
         break;
     default:
-        DPRINTF("Bad offset 0x%x\n", offset);
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "%s: Bad write offset 0x%"HWADDR_PRIx"\n",
+                      __func__, offset);
     }
 }
 
@@ -99,36 +108,35 @@ static const MemoryRegionOps puv3_gpio_ops = {
     .endianness = DEVICE_NATIVE_ENDIAN,
 };
 
-static int puv3_gpio_init(SysBusDevice *dev)
+static void puv3_gpio_realize(DeviceState *dev, Error **errp)
 {
     PUV3GPIOState *s = PUV3_GPIO(dev);
+    SysBusDevice *sbd = SYS_BUS_DEVICE(dev);
 
     s->reg_GPLR = 0;
     s->reg_GPDR = 0;
 
     /* FIXME: these irqs not handled yet */
-    sysbus_init_irq(dev, &s->irq[PUV3_IRQS_GPIOLOW0]);
-    sysbus_init_irq(dev, &s->irq[PUV3_IRQS_GPIOLOW1]);
-    sysbus_init_irq(dev, &s->irq[PUV3_IRQS_GPIOLOW2]);
-    sysbus_init_irq(dev, &s->irq[PUV3_IRQS_GPIOLOW3]);
-    sysbus_init_irq(dev, &s->irq[PUV3_IRQS_GPIOLOW4]);
-    sysbus_init_irq(dev, &s->irq[PUV3_IRQS_GPIOLOW5]);
-    sysbus_init_irq(dev, &s->irq[PUV3_IRQS_GPIOLOW6]);
-    sysbus_init_irq(dev, &s->irq[PUV3_IRQS_GPIOLOW7]);
-    sysbus_init_irq(dev, &s->irq[PUV3_IRQS_GPIOHIGH]);
+    sysbus_init_irq(sbd, &s->irq[PUV3_IRQS_GPIOLOW0]);
+    sysbus_init_irq(sbd, &s->irq[PUV3_IRQS_GPIOLOW1]);
+    sysbus_init_irq(sbd, &s->irq[PUV3_IRQS_GPIOLOW2]);
+    sysbus_init_irq(sbd, &s->irq[PUV3_IRQS_GPIOLOW3]);
+    sysbus_init_irq(sbd, &s->irq[PUV3_IRQS_GPIOLOW4]);
+    sysbus_init_irq(sbd, &s->irq[PUV3_IRQS_GPIOLOW5]);
+    sysbus_init_irq(sbd, &s->irq[PUV3_IRQS_GPIOLOW6]);
+    sysbus_init_irq(sbd, &s->irq[PUV3_IRQS_GPIOLOW7]);
+    sysbus_init_irq(sbd, &s->irq[PUV3_IRQS_GPIOHIGH]);
 
     memory_region_init_io(&s->iomem, OBJECT(s), &puv3_gpio_ops, s, "puv3_gpio",
             PUV3_REGS_OFFSET);
-    sysbus_init_mmio(dev, &s->iomem);
-
-    return 0;
+    sysbus_init_mmio(sbd, &s->iomem);
 }
 
 static void puv3_gpio_class_init(ObjectClass *klass, void *data)
 {
-    SysBusDeviceClass *sdc = SYS_BUS_DEVICE_CLASS(klass);
+    DeviceClass *dc = DEVICE_CLASS(klass);
 
-    sdc->init = puv3_gpio_init;
+    dc->realize = puv3_gpio_realize;
 }
 
 static const TypeInfo puv3_gpio_info = {

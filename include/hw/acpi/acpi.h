@@ -8,7 +8,7 @@
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2 of the License, or (at your option) any later version.
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -21,9 +21,7 @@
  */
 
 #include "qemu/notify.h"
-#include "qemu/option.h"
 #include "exec/memory.h"
-#include "hw/irq.h"
 #include "hw/acpi/acpi_dev_interface.h"
 
 /*
@@ -38,6 +36,17 @@
 #define ACPI_PM1_REGISTER_WIDTH         16
 #define ACPI_PM2_REGISTER_WIDTH         8
 #define ACPI_PM_TIMER_WIDTH             32
+
+/* PC-style peripherals (also used by other machines).  */
+#define ACPI_PM_PROP_S3_DISABLED "disable_s3"
+#define ACPI_PM_PROP_S4_DISABLED "disable_s4"
+#define ACPI_PM_PROP_S4_VAL "s4_val"
+#define ACPI_PM_PROP_SCI_INT "sci_int"
+#define ACPI_PM_PROP_ACPI_ENABLE_CMD "acpi_enable_cmd"
+#define ACPI_PM_PROP_ACPI_DISABLE_CMD "acpi_disable_cmd"
+#define ACPI_PM_PROP_PM_IO_BASE "pm_io_base"
+#define ACPI_PM_PROP_GPE0_BLK "gpe0_blk"
+#define ACPI_PM_PROP_GPE0_BLK_LEN "gpe0_blk_len"
 
 /* PM Timer ticks per second (HZ) */
 #define PM_TIMER_FREQUENCY  3579545
@@ -59,13 +68,13 @@
 #define ACPI_BITMASK_WAKE_STATUS                0x8000
 
 #define ACPI_BITMASK_ALL_FIXED_STATUS           (\
-	ACPI_BITMASK_TIMER_STATUS          | \
-	ACPI_BITMASK_BUS_MASTER_STATUS     | \
-	ACPI_BITMASK_GLOBAL_LOCK_STATUS    | \
-	ACPI_BITMASK_POWER_BUTTON_STATUS   | \
-	ACPI_BITMASK_SLEEP_BUTTON_STATUS   | \
-	ACPI_BITMASK_RT_CLOCK_STATUS       | \
-	ACPI_BITMASK_WAKE_STATUS)
+        ACPI_BITMASK_TIMER_STATUS          | \
+        ACPI_BITMASK_BUS_MASTER_STATUS     | \
+        ACPI_BITMASK_GLOBAL_LOCK_STATUS    | \
+        ACPI_BITMASK_POWER_BUTTON_STATUS   | \
+        ACPI_BITMASK_SLEEP_BUTTON_STATUS   | \
+        ACPI_BITMASK_RT_CLOCK_STATUS       | \
+        ACPI_BITMASK_WAKE_STATUS)
 
 /* PM1x_EN */
 #define ACPI_BITMASK_TIMER_ENABLE               0x0001
@@ -119,6 +128,7 @@ struct ACPIPM1CNT {
     MemoryRegion io;
     uint16_t cnt;
     uint8_t s4_val;
+    bool acpi_only;
 };
 
 struct ACPIGPE {
@@ -154,7 +164,8 @@ void acpi_pm1_evt_init(ACPIREGS *ar, acpi_update_sci_fn update_sci,
 
 /* PM1a_CNT: piix and ich9 don't implement PM1b CNT. */
 void acpi_pm1_cnt_init(ACPIREGS *ar, MemoryRegion *parent,
-                       bool disable_s3, bool disable_s4, uint8_t s4_val);
+                       bool disable_s3, bool disable_s4, uint8_t s4_val,
+                       bool acpi_only);
 void acpi_pm1_cnt_update(ACPIREGS *ar,
                          bool sci_enable, bool sci_disable);
 void acpi_pm1_cnt_reset(ACPIREGS *ar);
@@ -172,7 +183,6 @@ void acpi_send_gpe_event(ACPIREGS *ar, qemu_irq irq,
 void acpi_update_sci(ACPIREGS *acpi_regs, qemu_irq irq);
 
 /* acpi.c */
-extern int acpi_enabled;
 extern char unsigned *acpi_tables;
 extern size_t acpi_tables_len;
 
@@ -180,7 +190,6 @@ uint8_t *acpi_table_first(void);
 uint8_t *acpi_table_next(uint8_t *current);
 unsigned acpi_table_len(void *current);
 void acpi_table_add(const QemuOpts *opts, Error **errp);
-void acpi_table_add_builtin(const QemuOpts *opts, Error **errp);
 
 typedef struct AcpiSlicOem AcpiSlicOem;
 struct AcpiSlicOem {

@@ -6,7 +6,7 @@
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2 of the License, or (at your option) any later version.
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -20,10 +20,11 @@
 #include "qemu/osdep.h"
 #include "cpu.h"
 #include "sysemu/cpus.h"
+#include "sysemu/cpu-timers.h"
 #include "disas/disas.h"
 #include "qemu/host-utils.h"
 #include "exec/exec-all.h"
-#include "tcg-op.h"
+#include "tcg/tcg-op.h"
 #include "exec/cpu_ldst.h"
 #include "exec/helper-proto.h"
 #include "exec/helper-gen.h"
@@ -78,7 +79,6 @@ struct DisasContext {
 #define DISAS_PC_STALE            DISAS_TARGET_2
 
 /* global register indexes */
-static TCGv_env cpu_env;
 static TCGv cpu_std_ir[31];
 static TCGv cpu_fir[31];
 static TCGv cpu_pc;
@@ -124,16 +124,7 @@ void alpha_translate_init(void)
     };
 #endif
 
-    static bool done_init = 0;
     int i;
-
-    if (done_init) {
-        return;
-    }
-    done_init = 1;
-
-    cpu_env = tcg_global_reg_new_ptr(TCG_AREG0, "env");
-    tcg_ctx.tcg_env = cpu_env;
 
     for (i = 0; i < 31; i++) {
         cpu_std_ir[i] = tcg_global_mem_new_i64(cpu_env,
@@ -166,7 +157,7 @@ void alpha_translate_init(void)
 
 static TCGv load_zero(DisasContext *ctx)
 {
-    if (TCGV_IS_UNUSED_I64(ctx->zero)) {
+    if (!ctx->zero) {
         ctx->zero = tcg_const_i64(0);
     }
     return ctx->zero;
@@ -174,7 +165,7 @@ static TCGv load_zero(DisasContext *ctx)
 
 static TCGv dest_sink(DisasContext *ctx)
 {
-    if (TCGV_IS_UNUSED_I64(ctx->sink)) {
+    if (!ctx->sink) {
         ctx->sink = tcg_temp_new();
     }
     return ctx->sink;
@@ -182,18 +173,18 @@ static TCGv dest_sink(DisasContext *ctx)
 
 static void free_context_temps(DisasContext *ctx)
 {
-    if (!TCGV_IS_UNUSED_I64(ctx->sink)) {
+    if (ctx->sink) {
         tcg_gen_discard_i64(ctx->sink);
         tcg_temp_free(ctx->sink);
-        TCGV_UNUSED_I64(ctx->sink);
+        ctx->sink = NULL;
     }
-    if (!TCGV_IS_UNUSED_I64(ctx->zero)) {
+    if (ctx->zero) {
         tcg_temp_free(ctx->zero);
-        TCGV_UNUSED_I64(ctx->zero);
+        ctx->zero = NULL;
     }
-    if (!TCGV_IS_UNUSED_I64(ctx->lit)) {
+    if (ctx->lit) {
         tcg_temp_free(ctx->lit);
-        TCGV_UNUSED_I64(ctx->lit);
+        ctx->lit = NULL;
     }
 }
 
@@ -413,7 +404,7 @@ static inline void gen_store_mem(DisasContext *ctx,
 
 static DisasJumpType gen_store_conditional(DisasContext *ctx, int ra, int rb,
                                            int32_t disp16, int mem_idx,
-                                           TCGMemOp op)
+                                           MemOp op)
 {
     TCGLabel *lab_fail, *lab_done;
     TCGv addr, val;
@@ -461,7 +452,7 @@ static bool in_superpage(DisasContext *ctx, int64_t addr)
 
 static bool use_exit_tb(DisasContext *ctx)
 {
-    return ((ctx->base.tb->cflags & CF_LAST_IO)
+    return ((tb_cflags(ctx->base.tb) & CF_LAST_IO)
             || ctx->base.singlestep_enabled
             || singlestep);
 }
@@ -498,7 +489,7 @@ static DisasJumpType gen_bdirect(DisasContext *ctx, int ra, int32_t disp)
     } else if (use_goto_tb(ctx, dest)) {
         tcg_gen_goto_tb(0);
         tcg_gen_movi_i64(cpu_pc, dest);
-        tcg_gen_exit_tb((uintptr_t)ctx->base.tb);
+        tcg_gen_exit_tb(ctx->base.tb, 0);
         return DISAS_NORETURN;
     } else {
         tcg_gen_movi_i64(cpu_pc, dest);
@@ -517,12 +508,12 @@ static DisasJumpType gen_bcond_internal(DisasContext *ctx, TCGCond cond,
 
         tcg_gen_goto_tb(0);
         tcg_gen_movi_i64(cpu_pc, ctx->base.pc_next);
-        tcg_gen_exit_tb((uintptr_t)ctx->base.tb);
+        tcg_gen_exit_tb(ctx->base.tb, 0);
 
         gen_set_label(lab_true);
         tcg_gen_goto_tb(1);
         tcg_gen_movi_i64(cpu_pc, dest);
-        tcg_gen_exit_tb((uintptr_t)ctx->base.tb + 1);
+        tcg_gen_exit_tb(ctx->base.tb, 1);
 
         return DISAS_NORETURN;
     } else {
@@ -814,7 +805,7 @@ static void gen_cvttq(DisasContext *ctx, int rb, int rc, int fn11)
 
 static void gen_ieee_intcvt(DisasContext *ctx,
                             void (*helper)(TCGv, TCGv_ptr, TCGv),
-			    int rb, int rc, int fn11)
+                            int rb, int rc, int fn11)
 {
     TCGv vb, vc;
 
@@ -1283,7 +1274,7 @@ static DisasJumpType gen_call_pal(DisasContext *ctx, int palcode)
         if (!use_exit_tb(ctx)) {
             tcg_gen_goto_tb(0);
             tcg_gen_movi_i64(cpu_pc, entry);
-            tcg_gen_exit_tb((uintptr_t)ctx->base.tb);
+            tcg_gen_exit_tb(ctx->base.tb, 0);
             return DISAS_NORETURN;
         } else {
             tcg_gen_movi_i64(cpu_pc, entry);
@@ -1339,10 +1330,9 @@ static DisasJumpType gen_mfpr(DisasContext *ctx, TCGv va, int regno)
     case 249: /* VMTIME */
         helper = gen_helper_get_vmtime;
     do_helper:
-        if (use_icount) {
+        if (tb_cflags(ctx->base.tb) & CF_USE_ICOUNT) {
             gen_io_start();
             helper(va);
-            gen_io_end();
             return DISAS_PC_STALE;
         } else {
             helper(va);
@@ -1376,6 +1366,7 @@ static DisasJumpType gen_mfpr(DisasContext *ctx, TCGv va, int regno)
 static DisasJumpType gen_mtpr(DisasContext *ctx, TCGv vb, int regno)
 {
     int data;
+    DisasJumpType ret = DISAS_NEXT;
 
     switch (regno) {
     case 255:
@@ -1405,6 +1396,10 @@ static DisasJumpType gen_mtpr(DisasContext *ctx, TCGv vb, int regno)
 
     case 251:
         /* ALARM */
+        if (tb_cflags(ctx->base.tb) & CF_USE_ICOUNT) {
+            gen_io_start();
+            ret = DISAS_PC_STALE;
+        }
         gen_helper_set_alarm(cpu_env, vb);
         break;
 
@@ -1444,7 +1439,7 @@ static DisasJumpType gen_mtpr(DisasContext *ctx, TCGv vb, int regno)
         break;
     }
 
-    return DISAS_NEXT;
+    return ret;
 }
 #endif /* !USER_ONLY*/
 
@@ -2405,10 +2400,9 @@ static DisasJumpType translate_one(DisasContext *ctx, uint32_t insn)
         case 0xC000:
             /* RPCC */
             va = dest_gpr(ctx, ra);
-            if (ctx->base.tb->cflags & CF_USE_ICOUNT) {
+            if (tb_cflags(ctx->base.tb) & CF_USE_ICOUNT) {
                 gen_io_start();
                 gen_helper_load_pcc(va, cpu_env);
-                gen_io_end();
                 ret = DISAS_PC_STALE;
             } else {
                 gen_helper_load_pcc(va, cpu_env);
@@ -2929,8 +2923,7 @@ static DisasJumpType translate_one(DisasContext *ctx, uint32_t insn)
     return ret;
 }
 
-static int alpha_tr_init_disas_context(DisasContextBase *dcbase,
-                                       CPUState *cpu, int max_insns)
+static void alpha_tr_init_disas_context(DisasContextBase *dcbase, CPUState *cpu)
 {
     DisasContext *ctx = container_of(dcbase, DisasContext, base);
     CPUAlphaState *env = cpu->env_ptr;
@@ -2958,9 +2951,9 @@ static int alpha_tr_init_disas_context(DisasContextBase *dcbase,
     /* Similarly for flush-to-zero.  */
     ctx->tb_ftz = -1;
 
-    TCGV_UNUSED_I64(ctx->zero);
-    TCGV_UNUSED_I64(ctx->sink);
-    TCGV_UNUSED_I64(ctx->lit);
+    ctx->zero = NULL;
+    ctx->sink = NULL;
+    ctx->lit = NULL;
 
     /* Bound the number of insns to execute to those left on the page.  */
     if (in_superpage(ctx, ctx->base.pc_first)) {
@@ -2969,8 +2962,7 @@ static int alpha_tr_init_disas_context(DisasContextBase *dcbase,
         mask = TARGET_PAGE_MASK;
     }
     bound = -(ctx->base.pc_first | mask) / 4;
-
-    return MIN(max_insns, bound);
+    ctx->base.max_insns = MIN(ctx->base.max_insns, bound);
 }
 
 static void alpha_tr_tb_start(DisasContextBase *db, CPUState *cpu)
@@ -3001,7 +2993,7 @@ static void alpha_tr_translate_insn(DisasContextBase *dcbase, CPUState *cpu)
 {
     DisasContext *ctx = container_of(dcbase, DisasContext, base);
     CPUAlphaState *env = cpu->env_ptr;
-    uint32_t insn = cpu_ldl_code(env, ctx->base.pc_next);
+    uint32_t insn = translator_ldl(env, ctx->base.pc_next);
 
     ctx->base.pc_next += 4;
     ctx->base.is_jmp = translate_one(ctx, insn);
@@ -3021,7 +3013,7 @@ static void alpha_tr_tb_stop(DisasContextBase *dcbase, CPUState *cpu)
         if (use_goto_tb(ctx, ctx->base.pc_next)) {
             tcg_gen_goto_tb(0);
             tcg_gen_movi_i64(cpu_pc, ctx->base.pc_next);
-            tcg_gen_exit_tb((uintptr_t)ctx->base.tb);
+            tcg_gen_exit_tb(ctx->base.tb, 0);
         }
         /* FALLTHRU */
     case DISAS_PC_STALE:
@@ -3029,7 +3021,7 @@ static void alpha_tr_tb_stop(DisasContextBase *dcbase, CPUState *cpu)
         /* FALLTHRU */
     case DISAS_PC_UPDATED:
         if (!use_exit_tb(ctx)) {
-            tcg_gen_lookup_and_goto_ptr(cpu_pc);
+            tcg_gen_lookup_and_goto_ptr();
             break;
         }
         /* FALLTHRU */
@@ -3037,7 +3029,7 @@ static void alpha_tr_tb_stop(DisasContextBase *dcbase, CPUState *cpu)
         if (ctx->base.singlestep_enabled) {
             gen_excp_1(EXCP_DEBUG, 0);
         } else {
-            tcg_gen_exit_tb(0);
+            tcg_gen_exit_tb(NULL, 0);
         }
         break;
     default:
@@ -3048,7 +3040,7 @@ static void alpha_tr_tb_stop(DisasContextBase *dcbase, CPUState *cpu)
 static void alpha_tr_disas_log(const DisasContextBase *dcbase, CPUState *cpu)
 {
     qemu_log("IN: %s\n", lookup_symbol(dcbase->pc_first));
-    log_target_disas(cpu, dcbase->pc_first, dcbase->tb->size, 1);
+    log_target_disas(cpu, dcbase->pc_first, dcbase->tb->size);
 }
 
 static const TranslatorOps alpha_tr_ops = {
@@ -3061,10 +3053,10 @@ static const TranslatorOps alpha_tr_ops = {
     .disas_log          = alpha_tr_disas_log,
 };
 
-void gen_intermediate_code(CPUState *cpu, TranslationBlock *tb)
+void gen_intermediate_code(CPUState *cpu, TranslationBlock *tb, int max_insns)
 {
     DisasContext dc;
-    translator_loop(&alpha_tr_ops, &dc.base, cpu, tb);
+    translator_loop(&alpha_tr_ops, &dc.base, cpu, tb, max_insns);
 }
 
 void restore_state_to_opc(CPUAlphaState *env, TranslationBlock *tb,

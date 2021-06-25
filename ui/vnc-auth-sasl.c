@@ -24,6 +24,7 @@
 
 #include "qemu/osdep.h"
 #include "qapi/error.h"
+#include "authz/base.h"
 #include "vnc.h"
 #include "trace.h"
 
@@ -48,9 +49,9 @@ void vnc_sasl_client_cleanup(VncState *vs)
 }
 
 
-long vnc_client_write_sasl(VncState *vs)
+size_t vnc_client_write_sasl(VncState *vs)
 {
-    long ret;
+    size_t ret;
 
     VNC_DEBUG("Write SASL: Pending output %p size %zd offset %zd "
               "Encoded: %p size %d offset %d\n",
@@ -67,6 +68,7 @@ long vnc_client_write_sasl(VncState *vs)
         if (err != SASL_OK)
             return vnc_client_io_error(vs, -1, NULL);
 
+        vs->sasl.encodedRawLength = vs->output.offset;
         vs->sasl.encodedOffset = 0;
     }
 
@@ -78,7 +80,23 @@ long vnc_client_write_sasl(VncState *vs)
 
     vs->sasl.encodedOffset += ret;
     if (vs->sasl.encodedOffset == vs->sasl.encodedLength) {
-        vs->output.offset = 0;
+        bool throttled = vs->force_update_offset != 0;
+        size_t offset;
+        if (vs->sasl.encodedRawLength >= vs->force_update_offset) {
+            vs->force_update_offset = 0;
+        } else {
+            vs->force_update_offset -= vs->sasl.encodedRawLength;
+        }
+        if (throttled && vs->force_update_offset == 0) {
+            trace_vnc_client_unthrottle_forced(vs, vs->ioc);
+        }
+        offset = vs->output.offset;
+        buffer_advance(&vs->output, vs->sasl.encodedRawLength);
+        if (offset >= vs->throttle_output_offset &&
+            vs->output.offset < vs->throttle_output_offset) {
+            trace_vnc_client_unthrottle_incremental(vs, vs->ioc,
+                                                    vs->output.offset);
+        }
         vs->sasl.encoded = NULL;
         vs->sasl.encodedOffset = vs->sasl.encodedLength = 0;
     }
@@ -93,16 +111,17 @@ long vnc_client_write_sasl(VncState *vs)
             g_source_remove(vs->ioc_tag);
         }
         vs->ioc_tag = qio_channel_add_watch(
-            vs->ioc, G_IO_IN, vnc_client_io, vs, NULL);
+            vs->ioc, G_IO_IN | G_IO_HUP | G_IO_ERR,
+            vnc_client_io, vs, NULL);
     }
 
     return ret;
 }
 
 
-long vnc_client_read_sasl(VncState *vs)
+size_t vnc_client_read_sasl(VncState *vs)
 {
-    long ret;
+    size_t ret;
     uint8_t encoded[4096];
     const char *decoded;
     unsigned int decodedLen;
@@ -129,13 +148,14 @@ long vnc_client_read_sasl(VncState *vs)
 static int vnc_auth_sasl_check_access(VncState *vs)
 {
     const void *val;
-    int err;
-    int allow;
+    int rv;
+    Error *err = NULL;
+    bool allow;
 
-    err = sasl_getprop(vs->sasl.conn, SASL_USERNAME, &val);
-    if (err != SASL_OK) {
+    rv = sasl_getprop(vs->sasl.conn, SASL_USERNAME, &val);
+    if (rv != SASL_OK) {
         trace_vnc_auth_fail(vs, vs->auth, "Cannot fetch SASL username",
-                            sasl_errstring(err, NULL, NULL));
+                            sasl_errstring(rv, NULL, NULL));
         return -1;
     }
     if (val == NULL) {
@@ -146,12 +166,19 @@ static int vnc_auth_sasl_check_access(VncState *vs)
     vs->sasl.username = g_strdup((const char*)val);
     trace_vnc_auth_sasl_username(vs, vs->sasl.username);
 
-    if (vs->vd->sasl.acl == NULL) {
+    if (vs->vd->sasl.authzid == NULL) {
         trace_vnc_auth_sasl_acl(vs, 1);
         return 0;
     }
 
-    allow = qemu_acl_party_is_allowed(vs->vd->sasl.acl, vs->sasl.username);
+    allow = qauthz_is_allowed_by_id(vs->vd->sasl.authzid,
+                                    vs->sasl.username, &err);
+    if (err) {
+        trace_vnc_auth_fail(vs, vs->auth, "Error from authz",
+                            error_get_pretty(err));
+        error_free(err);
+        return -1;
+    }
 
     trace_vnc_auth_sasl_acl(vs, allow);
     return allow ? 0 : -1;
@@ -261,7 +288,7 @@ static int protocol_client_auth_sasl_step(VncState *vs, uint8_t *data, size_t le
             goto authreject;
         }
 
-        /* Check username whitelist ACL */
+        /* Check the username access control list */
         if (vnc_auth_sasl_check_access(vs) < 0) {
             goto authreject;
         }
@@ -382,7 +409,7 @@ static int protocol_client_auth_sasl_start(VncState *vs, uint8_t *data, size_t l
             goto authreject;
         }
 
-        /* Check username whitelist ACL */
+        /* Check the username access control list */
         if (vnc_auth_sasl_check_access(vs) < 0) {
             goto authreject;
         }
@@ -496,6 +523,7 @@ vnc_socket_ip_addr_string(QIOChannelSocket *ioc,
 
     if (addr->type != SOCKET_ADDRESS_TYPE_INET) {
         error_setg(errp, "Not an inet socket type");
+        qapi_free_SocketAddress(addr);
         return NULL;
     }
     ret = g_strdup_printf("%s;%s", addr->u.inet.host, addr->u.inet.port);
@@ -550,7 +578,6 @@ void start_auth_sasl(VncState *vs)
     /* Inform SASL that we've got an external SSF layer from TLS/x509 */
     if (vs->auth == VNC_AUTH_VENCRYPT &&
         vs->subauth == VNC_AUTH_VENCRYPT_X509SASL) {
-        Error *local_err = NULL;
         int keysize;
         sasl_ssf_t ssf;
 
@@ -559,7 +586,6 @@ void start_auth_sasl(VncState *vs)
         if (keysize < 0) {
             trace_vnc_auth_fail(vs, vs->auth, "cannot TLS get cipher size",
                                 error_get_pretty(local_err));
-            error_free(local_err);
             sasl_dispose(&vs->sasl.conn);
             vs->sasl.conn = NULL;
             goto authabort;

@@ -22,7 +22,7 @@
 * This library is free software; you can redistribute it and/or
 * modify it under the terms of the GNU Lesser General Public
 * License as published by the Free Software Foundation; either
-* version 2 of the License, or (at your option) any later version.
+* version 2.1 of the License, or (at your option) any later version.
 *
 * This library is distributed in the hope that it will be useful,
 * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -32,6 +32,9 @@
 * You should have received a copy of the GNU Lesser General Public
 * License along with this library; if not, see <http://www.gnu.org/licenses/>.
 */
+
+#ifndef HW_NET_E1000E_CORE_H
+#define HW_NET_E1000E_CORE_H
 
 #define E1000E_PHY_PAGE_SIZE    (0x20)
 #define E1000E_PHY_PAGES        (0x07)
@@ -71,6 +74,8 @@ struct E1000Core {
         e1000x_txd_props props;
 
         bool skip_cp;
+        unsigned char sum_needed;
+        bool cptse;
         struct NetTxPkt *tx_pkt;
     } tx[E1000E_NUM_QUEUES];
 
@@ -107,6 +112,8 @@ struct E1000Core {
     NICState *owner_nic;
     PCIDevice *owner;
     void (*owner_start_recv)(PCIDevice *d);
+
+    uint32_t msi_causes_pending;
 };
 
 void
@@ -136,7 +143,7 @@ e1000e_core_set_link_status(E1000ECore *core);
 void
 e1000e_core_pci_uninit(E1000ECore *core);
 
-int
+bool
 e1000e_can_receive(E1000ECore *core);
 
 ssize_t
@@ -147,3 +154,5 @@ e1000e_receive_iov(E1000ECore *core, const struct iovec *iov, int iovcnt);
 
 void
 e1000e_start_recv(E1000ECore *core);
+
+#endif

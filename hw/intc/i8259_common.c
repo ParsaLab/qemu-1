@@ -22,9 +22,17 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
+
 #include "qemu/osdep.h"
-#include "hw/i386/pc.h"
+#include "hw/intc/i8259.h"
 #include "hw/isa/i8259_internal.h"
+#include "hw/qdev-properties.h"
+#include "migration/vmstate.h"
+#include "monitor/monitor.h"
+#include "qapi/error.h"
+
+static int irq_level[16];
+static uint64_t irq_count[16];
 
 void pic_reset_common(PICCommonState *s)
 {
@@ -87,15 +95,53 @@ ISADevice *i8259_init_chip(const char *name, ISABus *bus, bool master)
     DeviceState *dev;
     ISADevice *isadev;
 
-    isadev = isa_create(bus, name);
+    isadev = isa_new(name);
     dev = DEVICE(isadev);
     qdev_prop_set_uint32(dev, "iobase", master ? 0x20 : 0xa0);
     qdev_prop_set_uint32(dev, "elcr_addr", master ? 0x4d0 : 0x4d1);
     qdev_prop_set_uint8(dev, "elcr_mask", master ? 0xf8 : 0xde);
     qdev_prop_set_bit(dev, "master", master);
-    qdev_init_nofail(dev);
+    isa_realize_and_unref(isadev, bus, &error_fatal);
 
     return isadev;
+}
+
+void pic_stat_update_irq(int irq, int level)
+{
+    if (level != irq_level[irq]) {
+        irq_level[irq] = level;
+        if (level == 1) {
+            irq_count[irq]++;
+        }
+    }
+}
+
+bool pic_get_statistics(InterruptStatsProvider *obj,
+                        uint64_t **irq_counts, unsigned int *nb_irqs)
+{
+    PICCommonState *s = PIC_COMMON(obj);
+
+    if (s->master) {
+        *irq_counts = irq_count;
+        *nb_irqs = ARRAY_SIZE(irq_count);
+    } else {
+        *irq_counts = NULL;
+        *nb_irqs = 0;
+    }
+
+    return true;
+}
+
+void pic_print_info(InterruptStatsProvider *obj, Monitor *mon)
+{
+    PICCommonState *s = PIC_COMMON(obj);
+
+    pic_dispatch_pre_save(s);
+    monitor_printf(mon, "pic%d: irr=%02x imr=%02x isr=%02x hprio=%d "
+                   "irq_base=%02x rr_sel=%d elcr=%02x fnm=%d\n",
+                   s->master ? 0 : 1, s->irr, s->imr, s->isr, s->priority_add,
+                   s->irq_base, s->read_reg_select, s->elcr,
+                   s->special_fully_nested_mode);
 }
 
 static const VMStateDescription vmstate_pic_common = {
@@ -136,9 +182,10 @@ static Property pic_properties_common[] = {
 static void pic_common_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
+    InterruptStatsProviderClass *ic = INTERRUPT_STATS_PROVIDER_CLASS(klass);
 
     dc->vmsd = &vmstate_pic_common;
-    dc->props = pic_properties_common;
+    device_class_set_props(dc, pic_properties_common);
     dc->realize = pic_common_realize;
     /*
      * Reason: unlike ordinary ISA devices, the PICs need additional
@@ -147,6 +194,8 @@ static void pic_common_class_init(ObjectClass *klass, void *data)
      * code.
      */
     dc->user_creatable = false;
+    ic->get_statistics = pic_get_statistics;
+    ic->print_info = pic_print_info;
 }
 
 static const TypeInfo pic_common_type = {
@@ -156,6 +205,10 @@ static const TypeInfo pic_common_type = {
     .class_size = sizeof(PICCommonClass),
     .class_init = pic_common_class_init,
     .abstract = true,
+    .interfaces = (InterfaceInfo[]) {
+        { TYPE_INTERRUPT_STATS_PROVIDER },
+        { }
+    },
 };
 
 static void pic_common_register_types(void)

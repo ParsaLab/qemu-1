@@ -9,18 +9,21 @@
 
 #include "qemu/osdep.h"
 #include "hw/pci/pci.h"
+#include "hw/qdev-properties.h"
+#include "migration/vmstate.h"
 #include "qemu/log.h"
+#include "qemu/module.h"
 #include "net/net.h"
+#include "net/eth.h"
 #include "net/checksum.h"
 #include "hw/net/mii.h"
 #include "sysemu/sysemu.h"
 #include "trace.h"
-/* For crc32 */
-#include <zlib.h>
+#include "qom/object.h"
 
 #define TYPE_SUNGEM "sungem"
 
-#define SUNGEM(obj) OBJECT_CHECK(SunGEMState, (obj), TYPE_SUNGEM)
+OBJECT_DECLARE_SIMPLE_TYPE(SunGEMState, SUNGEM)
 
 #define MAX_PACKET_SIZE 9016
 
@@ -190,7 +193,7 @@ struct gem_rxd {
 #define RXDCTRL_ALTMAC    0x2000000000000000ULL  /* Matched ALT MAC */
 
 
-typedef struct {
+struct SunGEMState {
     PCIDevice pdev;
 
     MemoryRegion sungem;
@@ -219,7 +222,7 @@ typedef struct {
     uint8_t tx_data[MAX_PACKET_SIZE];
     uint32_t tx_size;
     uint64_t tx_first_ctl;
-} SunGEMState;
+};
 
 
 static void sungem_eval_irq(SunGEMState *s)
@@ -303,7 +306,7 @@ static void sungem_send_packet(SunGEMState *s, const uint8_t *buf,
     NetClientState *nc = qemu_get_queue(s->nic);
 
     if (s->macregs[MAC_XIFCFG >> 2] & MAC_XIFCFG_LBCK) {
-        nc->info->receive(nc, buf, size);
+        qemu_receive_packet(nc, buf, size);
     } else {
         qemu_send_packet(nc, buf, size);
     }
@@ -431,7 +434,7 @@ static bool sungem_rx_full(SunGEMState *s, uint32_t kick, uint32_t done)
     return kick == ((done + 1) & s->rx_mask);
 }
 
-static int sungem_can_receive(NetClientState *nc)
+static bool sungem_can_receive(NetClientState *nc)
 {
     SunGEMState *s = qemu_get_nic_opaque(nc);
     uint32_t kick, done, rxdma_cfg, rxmac_cfg;
@@ -443,11 +446,11 @@ static int sungem_can_receive(NetClientState *nc)
     /* If MAC disabled, can't receive */
     if ((rxmac_cfg & MAC_RXCFG_ENAB) == 0) {
         trace_sungem_rx_mac_disabled();
-        return 0;
+        return false;
     }
     if ((rxdma_cfg & RXDMA_CFG_ENABLE) == 0) {
         trace_sungem_rx_txdma_disabled();
-        return 0;
+        return false;
     }
 
     /* Check RX availability */
@@ -595,7 +598,7 @@ static ssize_t sungem_receive(NetClientState *nc, const uint8_t *buf,
     }
 
     /* Get MAC crc */
-    mac_crc = crc32(~0, buf, 6);
+    mac_crc = net_crc32_le(buf, ETH_ALEN);
 
     /* Packet isn't for me ? */
     rx_cond = sungem_check_rx_mac(s, buf, mac_crc);
@@ -1376,7 +1379,7 @@ static void sungem_instance_init(Object *obj)
 
     device_add_bootindex_property(obj, &s->conf.bootindex,
                                   "bootindex", "/ethernet-phy@0",
-                                  DEVICE(obj), NULL);
+                                  DEVICE(obj));
 }
 
 static Property sungem_properties[] = {
@@ -1427,7 +1430,7 @@ static void sungem_class_init(ObjectClass *klass, void *data)
     k->class_id = PCI_CLASS_NETWORK_ETHERNET;
     dc->vmsd = &vmstate_sungem;
     dc->reset = sungem_reset;
-    dc->props = sungem_properties;
+    device_class_set_props(dc, sungem_properties);
     set_bit(DEVICE_CATEGORY_NETWORK, dc->categories);
 }
 
@@ -1437,6 +1440,10 @@ static const TypeInfo sungem_info = {
     .instance_size = sizeof(SunGEMState),
     .class_init    = sungem_class_init,
     .instance_init = sungem_instance_init,
+    .interfaces = (InterfaceInfo[]) {
+        { INTERFACE_CONVENTIONAL_PCI_DEVICE },
+        { }
+    }
 };
 
 static void sungem_register_types(void)

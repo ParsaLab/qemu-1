@@ -12,8 +12,8 @@
 #define R_EADDR_QUADRANT3       0xC000000000000000
 
 /* Radix Partition Table Entry Fields */
-#define PATBE1_R_PRTB           0x0FFFFFFFFFFFF000
-#define PATBE1_R_PRTS           0x000000000000001F
+#define PATE1_R_PRTB           0x0FFFFFFFFFFFF000
+#define PATE1_R_PRTS           0x000000000000001F
 
 /* Radix Process Table Entry Fields */
 #define PRTBE_R_GET_RTS(rts) \
@@ -55,9 +55,9 @@ static inline int ppc_radix64_get_prot_eaa(uint64_t pte)
            (pte & R_PTE_EAA_X ? PAGE_EXEC : 0);
 }
 
-static inline int ppc_radix64_get_prot_amr(PowerPCCPU *cpu)
+static inline int ppc_radix64_get_prot_amr(const PowerPCCPU *cpu)
 {
-    CPUPPCState *env = &cpu->env;
+    const CPUPPCState *env = &cpu->env;
     int amr = env->spr[SPR_AMR] >> 62; /* We only care about key0 AMR63:62 */
     int iamr = env->spr[SPR_IAMR] >> 62; /* We only care about key0 IAMR63:62 */
 

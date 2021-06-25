@@ -1,15 +1,14 @@
-#ifndef TARGET_SIGNAL_H
-#define TARGET_SIGNAL_H
-
-#include "cpu.h"
+#ifndef NIOS2_TARGET_SIGNAL_H
+#define NIOS2_TARGET_SIGNAL_H
 
 /* this struct defines a stack used during syscall handling */
 
 typedef struct target_sigaltstack {
-    abi_long ss_sp;
+    abi_ulong ss_sp;
+    abi_int ss_flags;
     abi_ulong ss_size;
-    abi_long ss_flags;
 } target_stack_t;
+
 
 /* sigaltstack controls  */
 #define TARGET_SS_ONSTACK     1
@@ -18,9 +17,6 @@ typedef struct target_sigaltstack {
 #define TARGET_MINSIGSTKSZ    2048
 #define TARGET_SIGSTKSZ       8192
 
-static inline abi_ulong get_sp_from_cpustate(CPUNios2State *state)
-{
-    return state->regs[R_SP];
-}
+#include "../generic/signal.h"
 
-#endif /* TARGET_SIGNAL_H */
+#endif /* NIOS2_TARGET_SIGNAL_H */

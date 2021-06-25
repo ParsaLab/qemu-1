@@ -85,7 +85,7 @@ static int kvm_s390_stattrib_set_stattr(S390StAttribState *sa,
 {
     KVMS390StAttribState *sas = KVM_S390_STATTRIB(sa);
     MachineState *machine = MACHINE(qdev_get_machine());
-    unsigned long max = machine->maxram_size / TARGET_PAGE_SIZE;
+    unsigned long max = machine->ram_size / TARGET_PAGE_SIZE;
 
     if (start_gfn + count > max) {
         error_report("Out of memory bounds when setting storage attributes");
@@ -104,8 +104,9 @@ static void kvm_s390_stattrib_synchronize(S390StAttribState *sa)
 {
     KVMS390StAttribState *sas = KVM_S390_STATTRIB(sa);
     MachineState *machine = MACHINE(qdev_get_machine());
-    unsigned long max = machine->maxram_size / TARGET_PAGE_SIZE;
-    unsigned long cx, len = 1 << 19;
+    unsigned long max = machine->ram_size / TARGET_PAGE_SIZE;
+    /* We do not need to reach the maximum buffer size allowed */
+    unsigned long cx, len = KVM_S390_SKEYS_MAX / 2;
     int r;
     struct kvm_s390_cmma_log clog = {
         .flags = 0,
@@ -116,7 +117,7 @@ static void kvm_s390_stattrib_synchronize(S390StAttribState *sa)
         for (cx = 0; cx + len <= max; cx += len) {
             clog.start_gfn = cx;
             clog.count = len;
-            clog.values = (uint64_t)(sas->incoming_buffer + cx * len);
+            clog.values = (uint64_t)(sas->incoming_buffer + cx);
             r = kvm_vm_ioctl(kvm_state, KVM_S390_SET_CMMA_BITS, &clog);
             if (r) {
                 error_report("KVM_S390_SET_CMMA_BITS failed: %s", strerror(-r));
@@ -126,7 +127,7 @@ static void kvm_s390_stattrib_synchronize(S390StAttribState *sa)
         if (cx < max) {
             clog.start_gfn = cx;
             clog.count = max - cx;
-            clog.values = (uint64_t)(sas->incoming_buffer + cx * len);
+            clog.values = (uint64_t)(sas->incoming_buffer + cx);
             r = kvm_vm_ioctl(kvm_state, KVM_S390_SET_CMMA_BITS, &clog);
             if (r) {
                 error_report("KVM_S390_SET_CMMA_BITS failed: %s", strerror(-r));

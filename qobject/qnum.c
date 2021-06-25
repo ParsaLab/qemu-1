@@ -13,10 +13,8 @@
  */
 
 #include "qemu/osdep.h"
-#include "qapi/error.h"
 #include "qapi/qmp/qnum.h"
-#include "qapi/qmp/qobject.h"
-#include "qemu-common.h"
+#include "qobject-internal.h"
 
 /**
  * qnum_from_int(): Create a new QNum from an int64_t
@@ -164,37 +162,14 @@ double qnum_get_double(QNum *qn)
 
 char *qnum_to_string(QNum *qn)
 {
-    char *buffer;
-    int len;
-
     switch (qn->kind) {
     case QNUM_I64:
         return g_strdup_printf("%" PRId64, qn->u.i64);
     case QNUM_U64:
         return g_strdup_printf("%" PRIu64, qn->u.u64);
     case QNUM_DOUBLE:
-        /* FIXME: snprintf() is locale dependent; but JSON requires
-         * numbers to be formatted as if in the C locale. Dependence
-         * on C locale is a pervasive issue in QEMU. */
-        /* FIXME: This risks printing Inf or NaN, which are not valid
-         * JSON values. */
-        /* FIXME: the default precision of 6 for %f often causes
-         * rounding errors; we should be using DBL_DECIMAL_DIG (17),
-         * and only rounding to a shorter number if the result would
-         * still produce the same floating point value.  */
-        buffer = g_strdup_printf("%f" , qn->u.dbl);
-        len = strlen(buffer);
-        while (len > 0 && buffer[len - 1] == '0') {
-            len--;
-        }
-
-        if (len && buffer[len - 1] == '.') {
-            buffer[len - 1] = 0;
-        } else {
-            buffer[len] = 0;
-        }
-
-        return buffer;
+        /* 17 digits suffice for IEEE double */
+        return g_strdup_printf("%.17g", qn->u.dbl);
     }
 
     assert(0);
@@ -202,14 +177,57 @@ char *qnum_to_string(QNum *qn)
 }
 
 /**
- * qobject_to_qnum(): Convert a QObject into a QNum
+ * qnum_is_equal(): Test whether the two QNums are equal
+ *
+ * Negative integers are never considered equal to unsigned integers,
+ * but positive integers in the range [0, INT64_MAX] are considered
+ * equal independently of whether the QNum's kind is i64 or u64.
+ *
+ * Doubles are never considered equal to integers.
  */
-QNum *qobject_to_qnum(const QObject *obj)
+bool qnum_is_equal(const QObject *x, const QObject *y)
 {
-    if (!obj || qobject_type(obj) != QTYPE_QNUM) {
-        return NULL;
+    QNum *num_x = qobject_to(QNum, x);
+    QNum *num_y = qobject_to(QNum, y);
+
+    switch (num_x->kind) {
+    case QNUM_I64:
+        switch (num_y->kind) {
+        case QNUM_I64:
+            /* Comparison in native int64_t type */
+            return num_x->u.i64 == num_y->u.i64;
+        case QNUM_U64:
+            /* Implicit conversion of x to uin64_t, so we have to
+             * check its sign before */
+            return num_x->u.i64 >= 0 && num_x->u.i64 == num_y->u.u64;
+        case QNUM_DOUBLE:
+            return false;
+        }
+        abort();
+    case QNUM_U64:
+        switch (num_y->kind) {
+        case QNUM_I64:
+            return qnum_is_equal(y, x);
+        case QNUM_U64:
+            /* Comparison in native uint64_t type */
+            return num_x->u.u64 == num_y->u.u64;
+        case QNUM_DOUBLE:
+            return false;
+        }
+        abort();
+    case QNUM_DOUBLE:
+        switch (num_y->kind) {
+        case QNUM_I64:
+        case QNUM_U64:
+            return false;
+        case QNUM_DOUBLE:
+            /* Comparison in native double type */
+            return num_x->u.dbl == num_y->u.dbl;
+        }
+        abort();
     }
-    return container_of(obj, QNum, base);
+
+    abort();
 }
 
 /**
@@ -219,5 +237,5 @@ QNum *qobject_to_qnum(const QObject *obj)
 void qnum_destroy_obj(QObject *obj)
 {
     assert(obj != NULL);
-    g_free(qobject_to_qnum(obj));
+    g_free(qobject_to(QNum, obj));
 }

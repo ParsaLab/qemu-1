@@ -52,12 +52,14 @@ void virtio_scsi_dataplane_setup(VirtIOSCSI *s, Error **errp)
 static bool virtio_scsi_data_plane_handle_cmd(VirtIODevice *vdev,
                                               VirtQueue *vq)
 {
-    bool progress;
+    bool progress = false;
     VirtIOSCSI *s = VIRTIO_SCSI(vdev);
 
     virtio_scsi_acquire(s);
-    assert(s->ctx && s->dataplane_started);
-    progress = virtio_scsi_handle_cmd_vq(s, vq);
+    if (!s->dataplane_fenced) {
+        assert(s->ctx && s->dataplane_started);
+        progress = virtio_scsi_handle_cmd_vq(s, vq);
+    }
     virtio_scsi_release(s);
     return progress;
 }
@@ -65,12 +67,14 @@ static bool virtio_scsi_data_plane_handle_cmd(VirtIODevice *vdev,
 static bool virtio_scsi_data_plane_handle_ctrl(VirtIODevice *vdev,
                                                VirtQueue *vq)
 {
-    bool progress;
+    bool progress = false;
     VirtIOSCSI *s = VIRTIO_SCSI(vdev);
 
     virtio_scsi_acquire(s);
-    assert(s->ctx && s->dataplane_started);
-    progress = virtio_scsi_handle_ctrl_vq(s, vq);
+    if (!s->dataplane_fenced) {
+        assert(s->ctx && s->dataplane_started);
+        progress = virtio_scsi_handle_ctrl_vq(s, vq);
+    }
     virtio_scsi_release(s);
     return progress;
 }
@@ -78,12 +82,14 @@ static bool virtio_scsi_data_plane_handle_ctrl(VirtIODevice *vdev,
 static bool virtio_scsi_data_plane_handle_event(VirtIODevice *vdev,
                                                 VirtQueue *vq)
 {
-    bool progress;
+    bool progress = false;
     VirtIOSCSI *s = VIRTIO_SCSI(vdev);
 
     virtio_scsi_acquire(s);
-    assert(s->ctx && s->dataplane_started);
-    progress = virtio_scsi_handle_event_vq(s, vq);
+    if (!s->dataplane_fenced) {
+        assert(s->ctx && s->dataplane_started);
+        progress = virtio_scsi_handle_event_vq(s, vq);
+    }
     virtio_scsi_release(s);
     return progress;
 }
@@ -107,9 +113,10 @@ static int virtio_scsi_vring_init(VirtIOSCSI *s, VirtQueue *vq, int n,
     return 0;
 }
 
-/* assumes s->ctx held */
-static void virtio_scsi_clear_aio(VirtIOSCSI *s)
+/* Context: BH in IOThread */
+static void virtio_scsi_dataplane_stop_bh(void *opaque)
 {
+    VirtIOSCSI *s = opaque;
     VirtIOSCSICommon *vs = VIRTIO_SCSI_COMMON(s);
     int i;
 
@@ -125,6 +132,7 @@ int virtio_scsi_dataplane_start(VirtIODevice *vdev)
 {
     int i;
     int rc;
+    int vq_init_count = 0;
     BusState *qbus = qdev_get_parent_bus(DEVICE(vdev));
     VirtioBusClass *k = VIRTIO_BUS_GET_CLASS(qbus);
     VirtIOSCSICommon *vs = VIRTIO_SCSI_COMMON(vdev);
@@ -141,8 +149,8 @@ int virtio_scsi_dataplane_start(VirtIODevice *vdev)
     /* Set up guest notifier (irq) */
     rc = k->set_guest_notifiers(qbus->parent, vs->conf.num_queues + 2, true);
     if (rc != 0) {
-        fprintf(stderr, "virtio-scsi: Failed to set guest notifiers (%d), "
-                "ensure -enable-kvm is set\n", rc);
+        error_report("virtio-scsi: Failed to set guest notifiers (%d), "
+                     "ensure -accel kvm is set.", rc);
         goto fail_guest_notifiers;
     }
 
@@ -152,17 +160,22 @@ int virtio_scsi_dataplane_start(VirtIODevice *vdev)
     if (rc) {
         goto fail_vrings;
     }
+
+    vq_init_count++;
     rc = virtio_scsi_vring_init(s, vs->event_vq, 1,
                                 virtio_scsi_data_plane_handle_event);
     if (rc) {
         goto fail_vrings;
     }
+
+    vq_init_count++;
     for (i = 0; i < vs->conf.num_queues; i++) {
         rc = virtio_scsi_vring_init(s, vs->cmd_vqs[i], i + 2,
                                     virtio_scsi_data_plane_handle_cmd);
         if (rc) {
             goto fail_vrings;
         }
+        vq_init_count++;
     }
 
     s->dataplane_starting = false;
@@ -171,10 +184,11 @@ int virtio_scsi_dataplane_start(VirtIODevice *vdev)
     return 0;
 
 fail_vrings:
-    virtio_scsi_clear_aio(s);
+    aio_wait_bh_oneshot(s->ctx, virtio_scsi_dataplane_stop_bh, s);
     aio_context_release(s->ctx);
-    for (i = 0; i < vs->conf.num_queues + 2; i++) {
+    for (i = 0; i < vq_init_count; i++) {
         virtio_bus_set_host_notifier(VIRTIO_BUS(qbus), i, false);
+        virtio_bus_cleanup_host_notifier(VIRTIO_BUS(qbus), i);
     }
     k->set_guest_notifiers(qbus->parent, vs->conf.num_queues + 2, false);
 fail_guest_notifiers:
@@ -206,13 +220,14 @@ void virtio_scsi_dataplane_stop(VirtIODevice *vdev)
     s->dataplane_stopping = true;
 
     aio_context_acquire(s->ctx);
-    virtio_scsi_clear_aio(s);
+    aio_wait_bh_oneshot(s->ctx, virtio_scsi_dataplane_stop_bh, s);
     aio_context_release(s->ctx);
 
     blk_drain_all(); /* ensure there are no in-flight requests */
 
     for (i = 0; i < vs->conf.num_queues + 2; i++) {
         virtio_bus_set_host_notifier(VIRTIO_BUS(qbus), i, false);
+        virtio_bus_cleanup_host_notifier(VIRTIO_BUS(qbus), i);
     }
 
     /* Clean up guest notifier (irq) */

@@ -15,16 +15,16 @@
  */
 
 #include "qemu/osdep.h"
-#include "hw/hw.h"
 #include "hw/pci/msi.h"
 #include "hw/pci/msix.h"
 #include "hw/pci/pci.h"
 #include "hw/xen/xen.h"
+#include "sysemu/xen.h"
+#include "migration/qemu-file-types.h"
+#include "migration/vmstate.h"
 #include "qemu/range.h"
 #include "qapi/error.h"
 #include "trace.h"
-
-#define MSIX_CAP_LENGTH 12
 
 /* MSI enable bit and maskall bit are in byte 1 in FLAGS register */
 #define MSIX_CONTROL_OFFSET (PCI_MSIX_FLAGS + 1)
@@ -179,6 +179,7 @@ static uint64_t msix_table_mmio_read(void *opaque, hwaddr addr,
 {
     PCIDevice *dev = opaque;
 
+    assert(addr + size <= dev->msix_entries_nr * PCI_MSIX_ENTRY_SIZE);
     return pci_get_long(dev->msix_table + addr);
 }
 
@@ -188,6 +189,8 @@ static void msix_table_mmio_write(void *opaque, hwaddr addr,
     PCIDevice *dev = opaque;
     int vector = addr / PCI_MSIX_ENTRY_SIZE;
     bool was_masked;
+
+    assert(addr + size <= dev->msix_entries_nr * PCI_MSIX_ENTRY_SIZE);
 
     was_masked = msix_is_masked(dev, vector);
     pci_set_long(dev->msix_table + addr, val);
@@ -200,6 +203,9 @@ static const MemoryRegionOps msix_table_mmio_ops = {
     .endianness = DEVICE_LITTLE_ENDIAN,
     .valid = {
         .min_access_size = 4,
+        .max_access_size = 8,
+    },
+    .impl = {
         .max_access_size = 4,
     },
 };
@@ -228,6 +234,9 @@ static const MemoryRegionOps msix_pba_mmio_ops = {
     .endianness = DEVICE_LITTLE_ENDIAN,
     .valid = {
         .min_access_size = 4,
+        .max_access_size = 8,
+    },
+    .impl = {
         .max_access_size = 4,
     },
 };
@@ -345,7 +354,7 @@ int msix_init_exclusive_bar(PCIDevice *dev, unsigned short nentries,
     char *name;
     uint32_t bar_size = 4096;
     uint32_t bar_pba_offset = bar_size / 2;
-    uint32_t bar_pba_size = (nentries / 8 + 1) * 8;
+    uint32_t bar_pba_size = QEMU_ALIGN_UP(nentries, 64) / 8;
 
     /*
      * Migration compatibility dictates that this remains a 4k
@@ -501,7 +510,7 @@ void msix_reset(PCIDevice *dev)
     }
     msix_clear_all_vectors(dev);
     dev->config[dev->msix_cap + MSIX_CONTROL_OFFSET] &=
-	    ~dev->wmask[dev->msix_cap + MSIX_CONTROL_OFFSET];
+            ~dev->wmask[dev->msix_cap + MSIX_CONTROL_OFFSET];
     memset(dev->msix_table, 0, dev->msix_entries_nr * PCI_MSIX_ENTRY_SIZE);
     memset(dev->msix_pba, 0, QEMU_ALIGN_UP(dev->msix_entries_nr, 64) / 8);
     msix_mask_all(dev, dev->msix_entries_nr);
@@ -625,7 +634,7 @@ void msix_unset_vector_notifiers(PCIDevice *dev)
 }
 
 static int put_msix_state(QEMUFile *f, void *pv, size_t size,
-                          VMStateField *field, QJSON *vmdesc)
+                          const VMStateField *field, JSONWriter *vmdesc)
 {
     msix_save(pv, f);
 
@@ -633,7 +642,7 @@ static int put_msix_state(QEMUFile *f, void *pv, size_t size,
 }
 
 static int get_msix_state(QEMUFile *f, void *pv, size_t size,
-                          VMStateField *field)
+                          const VMStateField *field)
 {
     msix_load(pv, f);
     return 0;

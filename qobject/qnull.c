@@ -11,8 +11,8 @@
  */
 
 #include "qemu/osdep.h"
-#include "qemu-common.h"
-#include "qapi/qmp/qobject.h"
+#include "qapi/qmp/qnull.h"
+#include "qobject-internal.h"
 
 QNull qnull_ = {
     .base = {
@@ -20,3 +20,12 @@ QNull qnull_ = {
         .refcnt = 1,
     },
 };
+
+/**
+ * qnull_is_equal(): Always return true because any two QNull objects
+ * are equal.
+ */
+bool qnull_is_equal(const QObject *x, const QObject *y)
+{
+    return true;
+}

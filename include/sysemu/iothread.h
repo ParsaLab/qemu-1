@@ -16,34 +16,36 @@
 
 #include "block/aio.h"
 #include "qemu/thread.h"
+#include "qom/object.h"
 
 #define TYPE_IOTHREAD "iothread"
 
-typedef struct {
+struct IOThread {
     Object parent_obj;
 
     QemuThread thread;
     AioContext *ctx;
+    bool run_gcontext;          /* whether we should run gcontext */
     GMainContext *worker_context;
     GMainLoop *main_loop;
-    GOnce once;
-    QemuMutex init_done_lock;
-    QemuCond init_done_cond;    /* is thread initialization done? */
-    bool stopping;
+    QemuSemaphore init_done_sem; /* is thread init done? */
+    bool stopping;              /* has iothread_stop() been called? */
+    bool running;               /* should iothread_run() continue? */
     int thread_id;
 
     /* AioContext poll parameters */
     int64_t poll_max_ns;
     int64_t poll_grow;
     int64_t poll_shrink;
-} IOThread;
+};
+typedef struct IOThread IOThread;
 
-#define IOTHREAD(obj) \
-   OBJECT_CHECK(IOThread, obj, TYPE_IOTHREAD)
+DECLARE_INSTANCE_CHECKER(IOThread, IOTHREAD,
+                         TYPE_IOTHREAD)
 
 char *iothread_get_id(IOThread *iothread);
+IOThread *iothread_by_id(const char *id);
 AioContext *iothread_get_aio_context(IOThread *iothread);
-void iothread_stop_all(void);
 GMainContext *iothread_get_g_main_context(IOThread *iothread);
 
 /*
@@ -54,5 +56,11 @@ GMainContext *iothread_get_g_main_context(IOThread *iothread);
 IOThread *iothread_create(const char *id, Error **errp);
 void iothread_stop(IOThread *iothread);
 void iothread_destroy(IOThread *iothread);
+
+/*
+ * Returns true if executing withing IOThread context,
+ * false otherwise.
+ */
+bool qemu_in_iothread(void);
 
 #endif /* IOTHREAD_H */

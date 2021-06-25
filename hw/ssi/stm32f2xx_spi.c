@@ -23,9 +23,10 @@
  */
 
 #include "qemu/osdep.h"
-#include "qapi/error.h"
 #include "qemu/log.h"
+#include "qemu/module.h"
 #include "hw/ssi/stm32f2xx_spi.h"
+#include "migration/vmstate.h"
 
 #ifndef STM_SPI_ERR_DEBUG
 #define STM_SPI_ERR_DEBUG 0
@@ -35,7 +36,7 @@
     if (STM_SPI_ERR_DEBUG >= lvl) { \
         qemu_log("%s: " fmt, __func__, ## args); \
     } \
-} while (0);
+} while (0)
 
 #define DB_PRINT(fmt, args...) DB_PRINT_L(1, fmt, ## args)
 

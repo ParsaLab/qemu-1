@@ -19,6 +19,7 @@
 #include "qemu/rcu.h"
 #include "qemu/rcu_queue.h"
 #include "qemu/cutils.h"
+#include "sysemu/qtest.h"
 
 /* Root node for synth file system */
 static V9fsSynthNode synth_root = {
@@ -78,11 +79,11 @@ int qemu_v9fs_synth_mkdir(V9fsSynthNode *parent, int mode,
     if (!parent) {
         parent = &synth_root;
     }
-    qemu_mutex_lock(&synth_mutex);
+    QEMU_LOCK_GUARD(&synth_mutex);
     QLIST_FOREACH(tmp, &parent->child, sibling) {
         if (!strcmp(tmp->name, name)) {
             ret = EEXIST;
-            goto err_out;
+            return ret;
         }
     }
     /* Add the name */
@@ -93,8 +94,6 @@ int qemu_v9fs_synth_mkdir(V9fsSynthNode *parent, int mode,
                       node->attr, node->attr->inode);
     *result = node;
     ret = 0;
-err_out:
-    qemu_mutex_unlock(&synth_mutex);
     return ret;
 }
 
@@ -115,11 +114,11 @@ int qemu_v9fs_synth_add_file(V9fsSynthNode *parent, int mode,
         parent = &synth_root;
     }
 
-    qemu_mutex_lock(&synth_mutex);
+    QEMU_LOCK_GUARD(&synth_mutex);
     QLIST_FOREACH(tmp, &parent->child, sibling) {
         if (!strcmp(tmp->name, name)) {
             ret = EEXIST;
-            goto err_out;
+            return ret;
         }
     }
     /* Add file type and remove write bits */
@@ -135,8 +134,6 @@ int qemu_v9fs_synth_add_file(V9fsSynthNode *parent, int mode,
     pstrcpy(node->name, sizeof(node->name), name);
     QLIST_INSERT_HEAD_RCU(&parent->child, node, sibling);
     ret = 0;
-err_out:
-    qemu_mutex_unlock(&synth_mutex);
     return ret;
 }
 
@@ -494,6 +491,7 @@ static int synth_name_to_path(FsContext *ctx, V9fsPath *dir_path,
     }
 out:
     /* Copy the node pointer to fid */
+    g_free(target->data);
     target->data = g_memdup(&node, sizeof(void *));
     target->size = sizeof(void *);
     return 0;
@@ -514,7 +512,27 @@ static int synth_unlinkat(FsContext *ctx, V9fsPath *dir,
     return -1;
 }
 
-static int synth_init(FsContext *ctx)
+static ssize_t v9fs_synth_qtest_write(void *buf, int len, off_t offset,
+                                      void *arg)
+{
+    return 1;
+}
+
+static ssize_t v9fs_synth_qtest_flush_write(void *buf, int len, off_t offset,
+                                            void *arg)
+{
+    bool should_block = !!*(uint8_t *)buf;
+
+    if (should_block) {
+        /* This will cause the server to call us again until we're cancelled */
+        errno = EINTR;
+        return -1;
+    }
+
+    return 1;
+}
+
+static int synth_init(FsContext *ctx, Error **errp)
 {
     QLIST_INIT(&synth_root.child);
     qemu_mutex_init(&synth_mutex);
@@ -527,6 +545,56 @@ static int synth_init(FsContext *ctx)
 
     /* Mark the subsystem is ready for use */
     synth_fs = 1;
+
+    if (qtest_enabled()) {
+        V9fsSynthNode *node = NULL;
+        int i, ret;
+
+        /* Directory hierarchy for WALK test */
+        for (i = 0; i < P9_MAXWELEM; i++) {
+            char *name = g_strdup_printf(QTEST_V9FS_SYNTH_WALK_FILE, i);
+
+            ret = qemu_v9fs_synth_mkdir(node, 0700, name, &node);
+            assert(!ret);
+            g_free(name);
+        }
+
+        /* File for LOPEN test */
+        ret = qemu_v9fs_synth_add_file(NULL, 0, QTEST_V9FS_SYNTH_LOPEN_FILE,
+                                       NULL, NULL, ctx);
+        assert(!ret);
+
+        /* File for WRITE test */
+        ret = qemu_v9fs_synth_add_file(NULL, 0, QTEST_V9FS_SYNTH_WRITE_FILE,
+                                       NULL, v9fs_synth_qtest_write, ctx);
+        assert(!ret);
+
+        /* File for FLUSH test */
+        ret = qemu_v9fs_synth_add_file(NULL, 0, QTEST_V9FS_SYNTH_FLUSH_FILE,
+                                       NULL, v9fs_synth_qtest_flush_write,
+                                       ctx);
+        assert(!ret);
+
+        /* Directory for READDIR test */
+        {
+            V9fsSynthNode *dir = NULL;
+            ret = qemu_v9fs_synth_mkdir(
+                NULL, 0700, QTEST_V9FS_SYNTH_READDIR_DIR, &dir
+            );
+            assert(!ret);
+            for (i = 0; i < QTEST_V9FS_SYNTH_READDIR_NFILES; ++i) {
+                char *name = g_strdup_printf(
+                    QTEST_V9FS_SYNTH_READDIR_FILE, i
+                );
+                ret = qemu_v9fs_synth_add_file(
+                    dir, 0, name, NULL, NULL, ctx
+                );
+                assert(!ret);
+                g_free(name);
+            }
+        }
+    }
+
     return 0;
 }
 

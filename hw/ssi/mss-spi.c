@@ -24,8 +24,11 @@
  */
 
 #include "qemu/osdep.h"
+#include "hw/irq.h"
 #include "hw/ssi/mss-spi.h"
+#include "migration/vmstate.h"
 #include "qemu/log.h"
+#include "qemu/module.h"
 
 #ifndef MSS_SPI_ERR_DEBUG
 #define MSS_SPI_ERR_DEBUG   0
@@ -35,7 +38,7 @@
     if (MSS_SPI_ERR_DEBUG >= lvl) { \
         qemu_log("%s: " fmt "\n", __func__, ## args); \
     } \
-} while (0);
+} while (0)
 
 #define DB_PRINT(fmt, args...) DB_PRINT_L(1, fmt, ## args)
 
@@ -76,9 +79,10 @@
 #define C_BIGFIFO            (1 << 29)
 #define C_RESET              (1 << 31)
 
-#define FRAMESZ_MASK         0x1F
+#define FRAMESZ_MASK         0x3F
 #define FMCOUNT_MASK         0x00FFFF00
 #define FMCOUNT_SHIFT        8
+#define FRAMESZ_MAX          32
 
 static void txfifo_reset(MSSSpiState *s)
 {
@@ -104,10 +108,8 @@ static void set_fifodepth(MSSSpiState *s)
         s->fifo_depth = 32;
     } else if (size <= 16) {
         s->fifo_depth = 16;
-    } else if (size <= 32) {
-        s->fifo_depth = 8;
     } else {
-        s->fifo_depth = 4;
+        s->fifo_depth = 8;
     }
 }
 
@@ -165,7 +167,13 @@ spi_read(void *opaque, hwaddr addr, unsigned int size)
     case R_SPI_RX:
         s->regs[R_SPI_STATUS] &= ~S_RXFIFOFUL;
         s->regs[R_SPI_STATUS] &= ~S_RXCHOVRF;
-        ret = fifo32_pop(&s->rx_fifo);
+        if (fifo32_is_empty(&s->rx_fifo)) {
+            qemu_log_mask(LOG_GUEST_ERROR,
+                          "%s: Reading empty RX_FIFO\n",
+                          __func__);
+        } else {
+            ret = fifo32_pop(&s->rx_fifo);
+        }
         if (fifo32_is_empty(&s->rx_fifo)) {
             s->regs[R_SPI_STATUS] |= S_RXFIFOEMP;
         }
@@ -301,6 +309,17 @@ static void spi_write(void *opaque, hwaddr addr,
         if (s->enabled) {
             break;
         }
+        /*
+         * [31:6] bits are reserved bits and for future use.
+         * [5:0] are for frame size. Only [5:0] bits are validated
+         * during write, [31:6] bits are untouched.
+         */
+        if ((value & FRAMESZ_MASK) > FRAMESZ_MAX) {
+            qemu_log_mask(LOG_GUEST_ERROR, "%s: Incorrect size %u provided."
+                         "Maximum frame size is %u\n",
+                         __func__, value & FRAMESZ_MASK, FRAMESZ_MAX);
+            break;
+        }
         s->regs[R_SPI_DFSIZE] = value;
         break;
 
@@ -357,7 +376,6 @@ static void mss_spi_realize(DeviceState *dev, Error **errp)
     s->spi = ssi_create_bus(dev, "spi");
 
     sysbus_init_irq(sbd, &s->irq);
-    ssi_auto_connect_slaves(dev, &s->cs_line, s->spi);
     sysbus_init_irq(sbd, &s->cs_line);
 
     memory_region_init_io(&s->mmio, OBJECT(s), &spi_ops, s,

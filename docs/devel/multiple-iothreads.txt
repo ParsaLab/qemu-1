@@ -1,4 +1,4 @@
-Copyright (c) 2014 Red Hat Inc.
+Copyright (c) 2014-2017 Red Hat Inc.
 
 This work is licensed under the terms of the GNU GPL, version 2 or later.  See
 the COPYING file in the top-level directory.
@@ -92,8 +92,9 @@ aio_context_acquire()/aio_context_release() for mutual exclusion.  Once the
 context is acquired no other thread can access it or run event loop iterations
 in this AioContext.
 
-aio_context_acquire()/aio_context_release() calls may be nested.  This
-means you can call them if you're not sure whether #2 applies.
+Legacy code sometimes nests aio_context_acquire()/aio_context_release() calls.
+Do not use nesting anymore, it is incompatible with the BDRV_POLL_WHILE() macro
+used in the block layer and can lead to hangs.
 
 There is currently no lock ordering rule if a thread needs to acquire multiple
 AioContexts simultaneously.  Therefore, it is only safe for code holding the
@@ -108,7 +109,7 @@ The AioContext originates from the QEMU block layer, even though nowadays
 AioContext is a generic event loop that can be used by any QEMU subsystem.
 
 The block layer has support for AioContext integrated.  Each BlockDriverState
-is associated with an AioContext using bdrv_set_aio_context() and
+is associated with an AioContext using bdrv_try_set_aio_context() and
 bdrv_get_aio_context().  This allows block layer code to process I/O inside the
 right AioContext.  Other subsystems may wish to follow a similar approach.
 
@@ -133,5 +134,5 @@ Long-running jobs (usually in the form of coroutines) are best scheduled in
 the BlockDriverState's AioContext to avoid the need to acquire/release around
 each bdrv_*() call.  The functions bdrv_add/remove_aio_context_notifier,
 or alternatively blk_add/remove_aio_context_notifier if you use BlockBackends,
-can be used to get a notification whenever bdrv_set_aio_context() moves a
+can be used to get a notification whenever bdrv_try_set_aio_context() moves a
 BlockDriverState to a different AioContext.

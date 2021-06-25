@@ -19,24 +19,25 @@
  *
  * You should have received a copy of the GNU General Public License along
  * with this program; if not, see <http://www.gnu.org/licenses/>.
- *
  */
+
+#ifndef XLNX_DP_H
+#define XLNX_DP_H
 
 #include "hw/sysbus.h"
 #include "ui/console.h"
 #include "hw/misc/auxbus.h"
 #include "hw/i2c/i2c.h"
 #include "hw/display/dpcd.h"
-#include "hw/i2c/i2c-ddc.h"
+#include "hw/display/i2c-ddc.h"
 #include "qemu/fifo8.h"
+#include "qemu/units.h"
 #include "hw/dma/xlnx_dpdma.h"
 #include "audio/audio.h"
+#include "qom/object.h"
 
-#ifndef XLNX_DP_H
-#define XLNX_DP_H
-
-#define AUD_CHBUF_MAX_DEPTH                 32768
-#define MAX_QEMU_BUFFER_SIZE                4096
+#define AUD_CHBUF_MAX_DEPTH                 (32 * KiB)
+#define MAX_QEMU_BUFFER_SIZE                (4 * KiB)
 
 #define DP_CORE_REG_ARRAY_SIZE              (0x3AF >> 2)
 #define DP_AVBUF_REG_ARRAY_SIZE             (0x238 >> 2)
@@ -48,7 +49,7 @@ struct PixmanPlane {
     DisplaySurface *surface;
 };
 
-typedef struct XlnxDPState {
+struct XlnxDPState {
     /*< private >*/
     SysBusDevice parent_obj;
 
@@ -101,9 +102,9 @@ typedef struct XlnxDPState {
      */
     DPCDState *dpcd;
     I2CDDCState *edid;
-} XlnxDPState;
+};
 
 #define TYPE_XLNX_DP "xlnx.v-dp"
-#define XLNX_DP(obj) OBJECT_CHECK(XlnxDPState, (obj), TYPE_XLNX_DP)
+OBJECT_DECLARE_SIMPLE_TYPE(XlnxDPState, XLNX_DP)
 
-#endif /* !XLNX_DP_H */
+#endif

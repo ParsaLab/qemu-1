@@ -11,40 +11,41 @@
  */
 
 #include "qemu/osdep.h"
-#include "qemu-common.h"
 #include "cpu.h"
 #include "kvm_s390x.h"
 #include <sys/ioctl.h>
 #include "qemu/error-report.h"
+#include "qemu/module.h"
 #include "qapi/error.h"
 #include "hw/sysbus.h"
 #include "sysemu/kvm.h"
 #include "hw/s390x/s390_flic.h"
 #include "hw/s390x/adapter.h"
 #include "hw/s390x/css.h"
+#include "migration/qemu-file-types.h"
 #include "trace.h"
+#include "qom/object.h"
 
-#define FLIC_SAVE_INITIAL_SIZE getpagesize()
+#define FLIC_SAVE_INITIAL_SIZE qemu_real_host_page_size
 #define FLIC_FAILED (-1UL)
 #define FLIC_SAVEVM_VERSION 1
 
-typedef struct KVMS390FLICState {
+struct KVMS390FLICState{
     S390FLICState parent_obj;
 
     uint32_t fd;
     bool clear_io_supported;
-} KVMS390FLICState;
+};
 
-DeviceState *s390_flic_kvm_create(void)
+static KVMS390FLICState *s390_get_kvm_flic(S390FLICState *fs)
 {
-    DeviceState *dev = NULL;
+    static KVMS390FLICState *flic;
 
-    if (kvm_enabled()) {
-        dev = qdev_create(NULL, TYPE_KVM_S390_FLIC);
-        object_property_add_child(qdev_get_machine(), TYPE_KVM_S390_FLIC,
-                                  OBJECT(dev), NULL);
+    if (!flic) {
+        /* we only have one flic device, so this is fine to cache */
+        flic = KVM_S390_FLIC(fs);
     }
-    return dev;
+    return flic;
 }
 
 /**
@@ -123,20 +124,70 @@ static int flic_enqueue_irqs(void *buf, uint64_t len,
     return rc ? -errno : 0;
 }
 
-int kvm_s390_inject_flic(struct kvm_s390_irq *irq)
+static void kvm_s390_inject_flic(S390FLICState *fs, struct kvm_s390_irq *irq)
 {
-    static KVMS390FLICState *flic;
+    static bool use_flic = true;
+    int r;
 
-    if (unlikely(!flic)) {
-        flic = KVM_S390_FLIC(s390_get_flic());
+    if (use_flic) {
+        r = flic_enqueue_irqs(irq, sizeof(*irq), s390_get_kvm_flic(fs));
+        if (r == -ENOSYS) {
+            use_flic = false;
+        }
+        if (!r) {
+            return;
+        }
     }
-    return flic_enqueue_irqs(irq, sizeof(*irq), flic);
+    /* fallback to legacy KVM IOCTL in case FLIC fails */
+    kvm_s390_floating_interrupt_legacy(irq);
+}
+
+static void kvm_s390_inject_service(S390FLICState *fs, uint32_t parm)
+{
+        struct kvm_s390_irq irq = {
+        .type = KVM_S390_INT_SERVICE,
+        .u.ext.ext_params = parm,
+    };
+
+    kvm_s390_inject_flic(fs, &irq);
+}
+
+static void kvm_s390_inject_io(S390FLICState *fs, uint16_t subchannel_id,
+                               uint16_t subchannel_nr, uint32_t io_int_parm,
+                               uint32_t io_int_word)
+{
+    struct kvm_s390_irq irq = {
+        .u.io.subchannel_id = subchannel_id,
+        .u.io.subchannel_nr = subchannel_nr,
+        .u.io.io_int_parm = io_int_parm,
+        .u.io.io_int_word = io_int_word,
+    };
+
+    if (io_int_word & IO_INT_WORD_AI) {
+        irq.type = KVM_S390_INT_IO(1, 0, 0, 0);
+    } else {
+        irq.type = KVM_S390_INT_IO(0, (subchannel_id & 0xff00) >> 8,
+                                      (subchannel_id & 0x0006),
+                                      subchannel_nr);
+    }
+    kvm_s390_inject_flic(fs, &irq);
+}
+
+static void kvm_s390_inject_crw_mchk(S390FLICState *fs)
+{
+    struct kvm_s390_irq irq = {
+        .type = KVM_S390_MCHK,
+        .u.mchk.cr14 = CR14_CHANNEL_REPORT_SC,
+        .u.mchk.mcic = s390_build_validity_mcic() | MCIC_SC_CP,
+    };
+
+    kvm_s390_inject_flic(fs, &irq);
 }
 
 static int kvm_s390_clear_io_flic(S390FLICState *fs, uint16_t subchannel_id,
                            uint16_t subchannel_nr)
 {
-    KVMS390FLICState *flic = KVM_S390_FLIC(fs);
+    KVMS390FLICState *flic = s390_get_kvm_flic(fs);
     int rc;
     uint32_t sid = subchannel_id << 16 | subchannel_nr;
     struct kvm_device_attr attr = {
@@ -154,7 +205,7 @@ static int kvm_s390_clear_io_flic(S390FLICState *fs, uint16_t subchannel_id,
 static int kvm_s390_modify_ais_mode(S390FLICState *fs, uint8_t isc,
                                     uint16_t mode)
 {
-    KVMS390FLICState *flic = KVM_S390_FLIC(fs);
+    KVMS390FLICState *flic = s390_get_kvm_flic(fs);
     struct kvm_s390_ais_req req = {
         .isc = isc,
         .mode = mode,
@@ -174,7 +225,7 @@ static int kvm_s390_modify_ais_mode(S390FLICState *fs, uint8_t isc,
 static int kvm_s390_inject_airq(S390FLICState *fs, uint8_t type,
                                 uint8_t isc, uint8_t flags)
 {
-    KVMS390FLICState *flic = KVM_S390_FLIC(fs);
+    KVMS390FLICState *flic = s390_get_kvm_flic(fs);
     uint32_t id = css_get_adapter_id(type, isc);
     struct kvm_device_attr attr = {
         .group = KVM_DEV_FLIC_AIRQ_INJECT,
@@ -263,7 +314,7 @@ static int kvm_s390_io_adapter_map(S390FLICState *fs, uint32_t id,
         .group = KVM_DEV_FLIC_ADAPTER_MODIFY,
         .addr = (uint64_t)&req,
     };
-    KVMS390FLICState *flic = KVM_S390_FLIC(fs);
+    KVMS390FLICState *flic = s390_get_kvm_flic(fs);
     int r;
 
     if (!kvm_gsi_routing_enabled()) {
@@ -280,6 +331,10 @@ static int kvm_s390_add_adapter_routes(S390FLICState *fs,
 {
     int ret, i;
     uint64_t ind_offset = routes->adapter.ind_offset;
+
+    if (!kvm_gsi_routing_enabled()) {
+        return -ENOSYS;
+    }
 
     for (i = 0; i < routes->num_routes; i++) {
         ret = kvm_irqchip_add_adapter_route(kvm_state, &routes->adapter);
@@ -308,6 +363,10 @@ static void kvm_s390_release_adapter_routes(S390FLICState *fs,
 {
     int i;
 
+    if (!kvm_gsi_routing_enabled()) {
+        return;
+    }
+
     for (i = 0; i < routes->num_routes; i++) {
         if (routes->gsi[i] >= 0) {
             kvm_irqchip_release_virq(kvm_state, routes->gsi[i]);
@@ -327,7 +386,7 @@ static void kvm_s390_release_adapter_routes(S390FLICState *fs,
  * reached
  */
 static int kvm_flic_save(QEMUFile *f, void *opaque, size_t size,
-                         VMStateField *field, QJSON *vmdesc)
+                         const VMStateField *field, JSONWriter *vmdesc)
 {
     KVMS390FLICState *flic = opaque;
     int len = FLIC_SAVE_INITIAL_SIZE;
@@ -377,7 +436,7 @@ static int kvm_flic_save(QEMUFile *f, void *opaque, size_t size,
  * in QEMUFile
  */
 static int kvm_flic_load(QEMUFile *f, void *opaque, size_t size,
-                         VMStateField *field)
+                         const VMStateField *field)
 {
     uint64_t len = 0;
     uint64_t count = 0;
@@ -389,17 +448,14 @@ static int kvm_flic_load(QEMUFile *f, void *opaque, size_t size,
     count = qemu_get_be64(f);
     len = count * sizeof(struct kvm_s390_irq);
     if (count == FLIC_FAILED) {
-        r = -EINVAL;
-        goto out;
+        return -EINVAL;
     }
     if (count == 0) {
-        r = 0;
-        goto out;
+        return 0;
     }
     buf = g_try_malloc0(len);
     if (!buf) {
-        r = -ENOMEM;
-        goto out;
+        return -ENOMEM;
     }
 
     if (qemu_get_buffer(f, (uint8_t *) buf, len) != len) {
@@ -410,7 +466,6 @@ static int kvm_flic_load(QEMUFile *f, void *opaque, size_t size,
 
 out_free:
     g_free(buf);
-out:
     return r;
 }
 
@@ -515,16 +570,15 @@ static const VMStateDescription kvm_s390_flic_vmstate = {
     }
 };
 
-typedef struct KVMS390FLICStateClass {
+struct KVMS390FLICStateClass {
     S390FLICStateClass parent_class;
     DeviceRealize parent_realize;
-} KVMS390FLICStateClass;
+};
+typedef struct KVMS390FLICStateClass KVMS390FLICStateClass;
 
-#define KVM_S390_FLIC_GET_CLASS(obj) \
-    OBJECT_GET_CLASS(KVMS390FLICStateClass, (obj), TYPE_KVM_S390_FLIC)
+DECLARE_CLASS_CHECKERS(KVMS390FLICStateClass, KVM_S390_FLIC,
+                       TYPE_KVM_S390_FLIC)
 
-#define KVM_S390_FLIC_CLASS(klass) \
-    OBJECT_CLASS_CHECK(KVMS390FLICStateClass, (klass), TYPE_KVM_S390_FLIC)
 
 static void kvm_s390_flic_realize(DeviceState *dev, Error **errp)
 {
@@ -532,26 +586,21 @@ static void kvm_s390_flic_realize(DeviceState *dev, Error **errp)
     struct kvm_create_device cd = {0};
     struct kvm_device_attr test_attr = {0};
     int ret;
-    Error *errp_local = NULL;
+    Error *err = NULL;
 
-    KVM_S390_FLIC_GET_CLASS(dev)->parent_realize(dev, &errp_local);
-    if (errp_local) {
-        goto fail;
+    KVM_S390_FLIC_GET_CLASS(dev)->parent_realize(dev, &err);
+    if (err) {
+        error_propagate(errp, err);
+        return;
     }
     flic_state->fd = -1;
-    if (!kvm_check_extension(kvm_state, KVM_CAP_DEVICE_CTRL)) {
-        error_setg_errno(&errp_local, errno, "KVM is missing capability"
-                         " KVM_CAP_DEVICE_CTRL");
-        trace_flic_no_device_api(errno);
-        goto fail;
-    }
 
     cd.type = KVM_DEV_TYPE_FLIC;
     ret = kvm_vm_ioctl(kvm_state, KVM_CREATE_DEVICE, &cd);
     if (ret < 0) {
-        error_setg_errno(&errp_local, errno, "Creating the KVM device failed");
+        error_setg_errno(errp, errno, "Creating the KVM device failed");
         trace_flic_create_device(errno);
-        goto fail;
+        return;
     }
     flic_state->fd = cd.fd;
 
@@ -559,9 +608,6 @@ static void kvm_s390_flic_realize(DeviceState *dev, Error **errp)
     test_attr.group = KVM_DEV_FLIC_CLEAR_IO_IRQ;
     flic_state->clear_io_supported = !ioctl(flic_state->fd,
                                             KVM_HAS_DEVICE_ATTR, test_attr);
-    return;
-fail:
-    error_propagate(errp, errp_local);
 }
 
 static void kvm_s390_flic_reset(DeviceState *dev)
@@ -614,6 +660,9 @@ static void kvm_s390_flic_class_init(ObjectClass *oc, void *data)
     fsc->clear_io_irq = kvm_s390_clear_io_flic;
     fsc->modify_ais_mode = kvm_s390_modify_ais_mode;
     fsc->inject_airq = kvm_s390_inject_airq;
+    fsc->inject_service = kvm_s390_inject_service;
+    fsc->inject_io = kvm_s390_inject_io;
+    fsc->inject_crw_mchk = kvm_s390_inject_crw_mchk;
 }
 
 static const TypeInfo kvm_s390_flic_info = {

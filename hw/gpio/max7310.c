@@ -9,11 +9,16 @@
 
 #include "qemu/osdep.h"
 #include "hw/i2c/i2c.h"
+#include "hw/irq.h"
+#include "migration/vmstate.h"
+#include "qemu/log.h"
+#include "qemu/module.h"
+#include "qom/object.h"
 
 #define TYPE_MAX7310 "max7310"
-#define MAX7310(obj) OBJECT_CHECK(MAX7310State, (obj), TYPE_MAX7310)
+OBJECT_DECLARE_SIMPLE_TYPE(MAX7310State, MAX7310)
 
-typedef struct MAX7310State {
+struct MAX7310State {
     I2CSlave parent_obj;
 
     int i2c_command_byte;
@@ -26,7 +31,7 @@ typedef struct MAX7310State {
     uint8_t command;
     qemu_irq handler[8];
     qemu_irq *gpio_in;
-} MAX7310State;
+};
 
 static void max7310_reset(DeviceState *dev)
 {
@@ -39,18 +44,16 @@ static void max7310_reset(DeviceState *dev)
     s->command = 0x00;
 }
 
-static int max7310_rx(I2CSlave *i2c)
+static uint8_t max7310_rx(I2CSlave *i2c)
 {
     MAX7310State *s = MAX7310(i2c);
 
     switch (s->command) {
     case 0x00:	/* Input port */
         return s->level ^ s->polarity;
-        break;
 
     case 0x01:	/* Output port */
         return s->level & ~s->direction;
-        break;
 
     case 0x02:	/* Polarity inversion */
         return s->polarity;
@@ -60,15 +63,13 @@ static int max7310_rx(I2CSlave *i2c)
 
     case 0x04:	/* Timeout */
         return s->status;
-        break;
 
     case 0xff:	/* Reserved */
         return 0xff;
 
     default:
-#ifdef VERBOSE
-        printf("%s: unknown register %02x\n", __FUNCTION__, s->command);
-#endif
+        qemu_log_mask(LOG_UNIMP, "%s: Unsupported register 0x02%" PRIx8 "\n",
+                      __func__, s->command);
         break;
     }
     return 0xff;
@@ -82,7 +83,7 @@ static int max7310_tx(I2CSlave *i2c, uint8_t data)
 
     if (s->len ++ > 1) {
 #ifdef VERBOSE
-        printf("%s: message too long (%i bytes)\n", __FUNCTION__, s->len);
+        printf("%s: message too long (%i bytes)\n", __func__, s->len);
 #endif
         return 1;
     }
@@ -118,11 +119,10 @@ static int max7310_tx(I2CSlave *i2c, uint8_t data)
         break;
 
     case 0x00:	/* Input port - ignore writes */
-	break;
+        break;
     default:
-#ifdef VERBOSE
-        printf("%s: unknown register %02x\n", __FUNCTION__, s->command);
-#endif
+        qemu_log_mask(LOG_UNIMP, "%s: Unsupported register 0x02%" PRIx8 "\n",
+                      __func__, s->command);
         return 1;
     }
 
@@ -141,7 +141,7 @@ static int max7310_event(I2CSlave *i2c, enum i2c_event event)
     case I2C_FINISH:
 #ifdef VERBOSE
         if (s->len == 1)
-            printf("%s: message too short (%i bytes)\n", __FUNCTION__, s->len);
+            printf("%s: message too short (%i bytes)\n", __func__, s->len);
 #endif
         break;
     default:
@@ -171,8 +171,7 @@ static const VMStateDescription vmstate_max7310 = {
 static void max7310_gpio_set(void *opaque, int line, int level)
 {
     MAX7310State *s = (MAX7310State *) opaque;
-    if (line >= ARRAY_SIZE(s->handler) || line  < 0)
-        hw_error("bad GPIO line");
+    assert(line >= 0 && line < ARRAY_SIZE(s->handler));
 
     if (level)
         s->level |= s->direction & (1 << line);
@@ -182,14 +181,13 @@ static void max7310_gpio_set(void *opaque, int line, int level)
 
 /* MAX7310 is SMBus-compatible (can be used with only SMBus protocols),
  * but also accepts sequences that are not SMBus so return an I2C device.  */
-static int max7310_init(I2CSlave *i2c)
+static void max7310_realize(DeviceState *dev, Error **errp)
 {
-    MAX7310State *s = MAX7310(i2c);
+    I2CSlave *i2c = I2C_SLAVE(dev);
+    MAX7310State *s = MAX7310(dev);
 
     qdev_init_gpio_in(&i2c->qdev, max7310_gpio_set, 8);
     qdev_init_gpio_out(&i2c->qdev, s->handler, 8);
-
-    return 0;
 }
 
 static void max7310_class_init(ObjectClass *klass, void *data)
@@ -197,7 +195,7 @@ static void max7310_class_init(ObjectClass *klass, void *data)
     DeviceClass *dc = DEVICE_CLASS(klass);
     I2CSlaveClass *k = I2C_SLAVE_CLASS(klass);
 
-    k->init = max7310_init;
+    dc->realize = max7310_realize;
     k->event = max7310_event;
     k->recv = max7310_rx;
     k->send = max7310_tx;

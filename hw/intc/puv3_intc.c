@@ -8,16 +8,21 @@
  * published by the Free Software Foundation, or any later version.
  * See the COPYING file in the top-level directory.
  */
+
 #include "qemu/osdep.h"
+#include "hw/irq.h"
 #include "hw/sysbus.h"
+#include "qom/object.h"
 
 #undef DEBUG_PUV3
 #include "hw/unicore32/puv3.h"
+#include "qemu/module.h"
+#include "qemu/log.h"
 
 #define TYPE_PUV3_INTC "puv3_intc"
-#define PUV3_INTC(obj) OBJECT_CHECK(PUV3INTCState, (obj), TYPE_PUV3_INTC)
+OBJECT_DECLARE_SIMPLE_TYPE(PUV3INTCState, PUV3_INTC)
 
-typedef struct PUV3INTCState {
+struct PUV3INTCState {
     SysBusDevice parent_obj;
 
     MemoryRegion iomem;
@@ -25,7 +30,7 @@ typedef struct PUV3INTCState {
 
     uint32_t reg_ICMR;
     uint32_t reg_ICPR;
-} PUV3INTCState;
+};
 
 /* Update interrupt status after enabled or pending bits have been changed.  */
 static void puv3_intc_update(PUV3INTCState *s)
@@ -65,7 +70,9 @@ static uint64_t puv3_intc_read(void *opaque, hwaddr offset,
         ret = s->reg_ICPR; /* the same value with ICPR */
         break;
     default:
-        DPRINTF("Bad offset %x\n", (int)offset);
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "%s: Bad read offset 0x%"HWADDR_PRIx"\n",
+                      __func__, offset);
     }
     DPRINTF("offset 0x%x, value 0x%x\n", offset, ret);
     return ret;
@@ -85,7 +92,9 @@ static void puv3_intc_write(void *opaque, hwaddr offset,
         s->reg_ICMR = value;
         break;
     default:
-        DPRINTF("Bad offset 0x%x\n", (int)offset);
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "%s: Bad write offset 0x%"HWADDR_PRIx"\n",
+                      __func__, offset);
         return;
     }
     puv3_intc_update(s);
@@ -101,10 +110,10 @@ static const MemoryRegionOps puv3_intc_ops = {
     .endianness = DEVICE_NATIVE_ENDIAN,
 };
 
-static int puv3_intc_init(SysBusDevice *sbd)
+static void puv3_intc_realize(DeviceState *dev, Error **errp)
 {
-    DeviceState *dev = DEVICE(sbd);
     PUV3INTCState *s = PUV3_INTC(dev);
+    SysBusDevice *sbd = SYS_BUS_DEVICE(dev);
 
     qdev_init_gpio_in(dev, puv3_intc_handler, PUV3_IRQS_NR);
     sysbus_init_irq(sbd, &s->parent_irq);
@@ -115,15 +124,12 @@ static int puv3_intc_init(SysBusDevice *sbd)
     memory_region_init_io(&s->iomem, OBJECT(s), &puv3_intc_ops, s, "puv3_intc",
                           PUV3_REGS_OFFSET);
     sysbus_init_mmio(sbd, &s->iomem);
-
-    return 0;
 }
 
 static void puv3_intc_class_init(ObjectClass *klass, void *data)
 {
-    SysBusDeviceClass *sdc = SYS_BUS_DEVICE_CLASS(klass);
-
-    sdc->init = puv3_intc_init;
+    DeviceClass *dc = DEVICE_CLASS(klass);
+    dc->realize = puv3_intc_realize;
 }
 
 static const TypeInfo puv3_intc_info = {

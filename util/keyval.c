@@ -14,10 +14,11 @@
  * KEY=VALUE,... syntax:
  *
  *   key-vals     = [ key-val { ',' key-val } [ ',' ] ]
- *   key-val      = key '=' val
+ *   key-val      = key '=' val | help
  *   key          = key-fragment { '.' key-fragment }
- *   key-fragment = / [^=,.]* /
- *   val          = { / [^,]* / | ',,' }
+ *   key-fragment = / [^=,.]+ /
+ *   val          = { / [^,]+ / | ',,' }
+ *   help         = 'help' | '?'
  *
  * Semantics defined by reduction to JSON:
  *
@@ -54,6 +55,9 @@
  *
  * The length of any key-fragment must be between 1 and 127.
  *
+ * If any key-val is help, the object is to be treated as a help
+ * request.
+ *
  * Design flaw: there is no way to denote an empty array or non-root
  * object.  While interpreting "key absent" as empty seems natural
  * (removing a key-val from the input string removes the member when
@@ -71,18 +75,25 @@
  * Awkward.  Note that we carefully restrict alternate types to avoid
  * similar ambiguity.
  *
- * Additional syntax for use with an implied key:
+ * Alternative syntax for use with an implied key:
  *
- *   key-vals-ik  = val-no-key [ ',' key-vals ]
- *   val-no-key   = / [^=,]* /
+ *   key-vals     = [ key-val-1st { ',' key-val } [ ',' ] ]
+ *   key-val-1st  = val-no-key | key-val
+ *   val-no-key   = / [^=,]+ / - help
  *
- * where no-key is syntactic sugar for implied-key=val-no-key.
+ * where val-no-key is syntactic sugar for implied-key=val-no-key.
+ *
+ * Note that you can't use the sugared form when the value contains
+ * '=' or ','.
  */
 
 #include "qemu/osdep.h"
 #include "qapi/error.h"
+#include "qapi/qmp/qdict.h"
+#include "qapi/qmp/qlist.h"
 #include "qapi/qmp/qstring.h"
 #include "qemu/cutils.h"
+#include "qemu/help_option.h"
 #include "qemu/option.h"
 
 /*
@@ -124,7 +135,7 @@ static int key_to_index(const char *key, const char **end)
  * Else, fail because we have conflicting needs on how to map
  * @key_in_cur.
  * In any case, take over the reference to @value, i.e. if the caller
- * wants to hold on to a reference, it needs to QINCREF().
+ * wants to hold on to a reference, it needs to qobject_ref().
  * Use @key up to @key_cursor to identify the key in error messages.
  * On success, return the mapped value.
  * On failure, store an error through @errp and return NULL.
@@ -141,7 +152,7 @@ static QObject *keyval_parse_put(QDict *cur,
         if (qobject_type(old) != (value ? QTYPE_QSTRING : QTYPE_QDICT)) {
             error_setg(errp, "Parameters '%.*s.*' used inconsistently",
                        (int)(key_cursor - key), key);
-            QDECREF(value);
+            qobject_unref(value);
             return NULL;
         }
         if (!value) {
@@ -156,31 +167,48 @@ static QObject *keyval_parse_put(QDict *cur,
 }
 
 /*
- * Parse one KEY=VALUE from @params, store result in @qdict.
+ * Parse one parameter from @params.
+ *
+ * If we're looking at KEY=VALUE, store result in @qdict.
  * The first fragment of KEY applies to @qdict.  Subsequent fragments
  * apply to nested QDicts, which are created on demand.  @implied_key
  * is as in keyval_parse().
- * On success, return a pointer to the next KEY=VALUE, or else to '\0'.
+ *
+ * If we're looking at "help" or "?", set *help to true.
+ *
+ * On success, return a pointer to the next parameter, or else to '\0'.
  * On failure, return NULL.
  */
 static const char *keyval_parse_one(QDict *qdict, const char *params,
-                                    const char *implied_key,
+                                    const char *implied_key, bool *help,
                                     Error **errp)
 {
-    const char *key, *key_end, *s, *end;
+    const char *key, *key_end, *val_end, *s, *end;
     size_t len;
     char key_in_cur[128];
     QDict *cur;
     int ret;
     QObject *next;
-    QString *val;
+    GString *val;
 
     key = params;
+    val_end = NULL;
     len = strcspn(params, "=,");
-    if (implied_key && len && key[len] != '=') {
-        /* Desugar implied key */
-        key = implied_key;
-        len = strlen(implied_key);
+    if (len && key[len] != '=') {
+        if (starts_with_help_option(key) == len) {
+            *help = true;
+            s = key + len;
+            if (*s == ',') {
+                s++;
+            }
+            return s;
+        }
+        if (implied_key) {
+            /* Desugar implied key */
+            key = implied_key;
+            val_end = params + len;
+            len = strlen(implied_key);
+        }
     }
     key_end = key + len;
 
@@ -219,7 +247,7 @@ static const char *keyval_parse_one(QDict *qdict, const char *params,
             if (!next) {
                 return NULL;
             }
-            cur = qobject_to_qdict(next);
+            cur = qobject_to(QDict, next);
             assert(cur);
         }
 
@@ -235,7 +263,11 @@ static const char *keyval_parse_one(QDict *qdict, const char *params,
 
     if (key == implied_key) {
         assert(!*s);
-        s = params;
+        val = g_string_new_len(params, val_end - params);
+        s = val_end;
+        if (*s == ',') {
+            s++;
+        }
     } else {
         if (*s != '=') {
             error_setg(errp, "Expected '=' after parameter '%.*s'",
@@ -243,22 +275,23 @@ static const char *keyval_parse_one(QDict *qdict, const char *params,
             return NULL;
         }
         s++;
-    }
 
-    val = qstring_new();
-    for (;;) {
-        if (!*s) {
-            break;
-        } else if (*s == ',') {
-            s++;
-            if (*s != ',') {
+        val = g_string_new(NULL);
+        for (;;) {
+            if (!*s) {
                 break;
+            } else if (*s == ',') {
+                s++;
+                if (*s != ',') {
+                    break;
+                }
             }
+            g_string_append_c(val, *s++);
         }
-        qstring_append_chr(val, *s++);
     }
 
-    if (!keyval_parse_put(cur, key_in_cur, val, key, key_end, errp)) {
+    if (!keyval_parse_put(cur, key_in_cur, qstring_from_gstring(val),
+                          key, key_end, errp)) {
         return NULL;
     }
     return s;
@@ -312,7 +345,7 @@ static QObject *keyval_listify(QDict *cur, GSList *key_of_cur, Error **errp)
             has_member = true;
         }
 
-        qdict = qobject_to_qdict(ent->value);
+        qdict = qobject_to(QDict, ent->value);
         if (!qdict) {
             continue;
         }
@@ -373,10 +406,10 @@ static QObject *keyval_listify(QDict *cur, GSList *key_of_cur, Error **errp)
             error_setg(errp, "Parameter '%s%d' missing", key, i);
             g_free(key);
             g_free(elt);
-            QDECREF(list);
+            qobject_unref(list);
             return NULL;
         }
-        qobject_incref(elt[i]);
+        qobject_ref(elt[i]);
         qlist_append_obj(list, elt[i]);
     }
 
@@ -386,31 +419,50 @@ static QObject *keyval_listify(QDict *cur, GSList *key_of_cur, Error **errp)
 
 /*
  * Parse @params in QEMU's traditional KEY=VALUE,... syntax.
+ *
  * If @implied_key, the first KEY= can be omitted.  @implied_key is
  * implied then, and VALUE can't be empty or contain ',' or '='.
+ *
+ * A parameter "help" or "?" without a value isn't added to the
+ * resulting dictionary, but instead is interpreted as help request.
+ * All other options are parsed and returned normally so that context
+ * specific help can be printed.
+ *
+ * If @p_help is not NULL, store whether help is requested there.
+ * If @p_help is NULL and help is requested, fail.
+ *
  * On success, return a dictionary of the parsed keys and values.
  * On failure, store an error through @errp and return NULL.
  */
 QDict *keyval_parse(const char *params, const char *implied_key,
-                    Error **errp)
+                    bool *p_help, Error **errp)
 {
     QDict *qdict = qdict_new();
     QObject *listified;
     const char *s;
+    bool help = false;
 
     s = params;
     while (*s) {
-        s = keyval_parse_one(qdict, s, implied_key, errp);
+        s = keyval_parse_one(qdict, s, implied_key, &help, errp);
         if (!s) {
-            QDECREF(qdict);
+            qobject_unref(qdict);
             return NULL;
         }
         implied_key = NULL;
     }
 
+    if (p_help) {
+        *p_help = help;
+    } else if (help) {
+        error_setg(errp, "Help is not available for this option");
+        qobject_unref(qdict);
+        return NULL;
+    }
+
     listified = keyval_listify(qdict, NULL, errp);
     if (!listified) {
-        QDECREF(qdict);
+        qobject_unref(qdict);
         return NULL;
     }
     assert(listified == QOBJECT(qdict));

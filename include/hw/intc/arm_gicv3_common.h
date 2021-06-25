@@ -26,6 +26,7 @@
 
 #include "hw/sysbus.h"
 #include "hw/intc/arm_gic_common.h"
+#include "qom/object.h"
 
 /*
  * Maximum number of possible interrupts, determined by the GIC architecture.
@@ -34,6 +35,8 @@
  */
 #define GICV3_MAXIRQ 1020
 #define GICV3_MAXSPI (GICV3_MAXIRQ - GIC_INTERNAL)
+
+#define GICV3_REDIST_SIZE 0x20000
 
 /* Number of SGI target-list bits */
 #define GICV3_TARGETLIST_BITS 16
@@ -60,7 +63,7 @@
  * avoids bugs where we forget to subtract GIC_INTERNAL from an
  * interrupt number.
  */
-#define GICV3_BMP_SIZE (DIV_ROUND_UP(GICV3_MAXIRQ, 32))
+#define GICV3_BMP_SIZE DIV_ROUND_UP(GICV3_MAXIRQ, 32)
 
 #define GIC_DECLARE_BITMAP(name) \
     uint32_t name[GICV3_BMP_SIZE]
@@ -150,7 +153,6 @@ struct GICv3CPUState {
     qemu_irq parent_fiq;
     qemu_irq parent_virq;
     qemu_irq parent_vfiq;
-    qemu_irq maintenance_irq;
 
     /* Redistributor */
     uint32_t level;                  /* Current IRQ level */
@@ -210,13 +212,16 @@ struct GICv3State {
     /*< public >*/
 
     MemoryRegion iomem_dist; /* Distributor */
-    MemoryRegion iomem_redist; /* Redistributors */
+    MemoryRegion *iomem_redist; /* Redistributor Regions */
+    uint32_t *redist_region_count; /* redistributor count within each region */
+    uint32_t nb_redist_regions; /* number of redist regions */
 
     uint32_t num_cpu;
     uint32_t num_irq;
     uint32_t revision;
     bool security_extn;
     bool irq_reset_nonsecure;
+    bool gicd_no_migration_shift_bug;
 
     int dev_fd; /* kvm device fd if backed by kvm vgic support */
     Error *migration_blocker;
@@ -274,23 +279,20 @@ GICV3_BITMAP_ACCESSORS(level)
 GICV3_BITMAP_ACCESSORS(edge_trigger)
 
 #define TYPE_ARM_GICV3_COMMON "arm-gicv3-common"
-#define ARM_GICV3_COMMON(obj) \
-     OBJECT_CHECK(GICv3State, (obj), TYPE_ARM_GICV3_COMMON)
-#define ARM_GICV3_COMMON_CLASS(klass) \
-     OBJECT_CLASS_CHECK(ARMGICv3CommonClass, (klass), TYPE_ARM_GICV3_COMMON)
-#define ARM_GICV3_COMMON_GET_CLASS(obj) \
-     OBJECT_GET_CLASS(ARMGICv3CommonClass, (obj), TYPE_ARM_GICV3_COMMON)
+typedef struct ARMGICv3CommonClass ARMGICv3CommonClass;
+DECLARE_OBJ_CHECKERS(GICv3State, ARMGICv3CommonClass,
+                     ARM_GICV3_COMMON, TYPE_ARM_GICV3_COMMON)
 
-typedef struct ARMGICv3CommonClass {
+struct ARMGICv3CommonClass {
     /*< private >*/
     SysBusDeviceClass parent_class;
     /*< public >*/
 
     void (*pre_save)(GICv3State *s);
     void (*post_load)(GICv3State *s);
-} ARMGICv3CommonClass;
+};
 
 void gicv3_init_irqs_and_mmio(GICv3State *s, qemu_irq_handler handler,
-                              const MemoryRegionOps *ops);
+                              const MemoryRegionOps *ops, Error **errp);
 
 #endif

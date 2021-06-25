@@ -12,7 +12,7 @@
 #ifndef QCRYPTO_HMAC_H
 #define QCRYPTO_HMAC_H
 
-#include "qapi-types.h"
+#include "qapi/qapi-types-crypto.h"
 
 typedef struct QCryptoHmac QCryptoHmac;
 struct QCryptoHmac {
@@ -64,6 +64,8 @@ QCryptoHmac *qcrypto_hmac_new(QCryptoHashAlgorithm alg,
  * previously allocated by qcrypto_hmac_new()
  */
 void qcrypto_hmac_free(QCryptoHmac *hmac);
+
+G_DEFINE_AUTOPTR_CLEANUP_FUNC(QCryptoHmac, qcrypto_hmac_free)
 
 /**
  * qcrypto_hmac_bytesv:

@@ -6,7 +6,7 @@
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2 of the License, or (at your option) any later version.
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -24,12 +24,11 @@
 #include "io/channel.h"
 #include "io/task.h"
 #include "qemu/sockets.h"
+#include "qom/object.h"
 
 #define TYPE_QIO_CHANNEL_SOCKET "qio-channel-socket"
-#define QIO_CHANNEL_SOCKET(obj)                                     \
-    OBJECT_CHECK(QIOChannelSocket, (obj), TYPE_QIO_CHANNEL_SOCKET)
+OBJECT_DECLARE_SIMPLE_TYPE(QIOChannelSocket, QIO_CHANNEL_SOCKET)
 
-typedef struct QIOChannelSocket QIOChannelSocket;
 
 /**
  * QIOChannelSocket:
@@ -101,6 +100,8 @@ int qio_channel_socket_connect_sync(QIOChannelSocket *ioc,
  * @callback: the function to invoke on completion
  * @opaque: user data to pass to @callback
  * @destroy: the function to free @opaque
+ * @context: the context to run the async task. If %NULL, the default
+ *           context will be used.
  *
  * Attempt to connect to the address @addr. This method
  * will run in the background so the caller will regain
@@ -113,13 +114,15 @@ void qio_channel_socket_connect_async(QIOChannelSocket *ioc,
                                       SocketAddress *addr,
                                       QIOTaskFunc callback,
                                       gpointer opaque,
-                                      GDestroyNotify destroy);
+                                      GDestroyNotify destroy,
+                                      GMainContext *context);
 
 
 /**
  * qio_channel_socket_listen_sync:
  * @ioc: the socket channel object
  * @addr: the address to listen to
+ * @num: the expected ammount of connections
  * @errp: pointer to a NULL-initialized error object
  *
  * Attempt to listen to the address @addr. This method
@@ -129,15 +132,19 @@ void qio_channel_socket_connect_async(QIOChannelSocket *ioc,
  */
 int qio_channel_socket_listen_sync(QIOChannelSocket *ioc,
                                    SocketAddress *addr,
+                                   int num,
                                    Error **errp);
 
 /**
  * qio_channel_socket_listen_async:
  * @ioc: the socket channel object
  * @addr: the address to listen to
+ * @num: the expected ammount of connections
  * @callback: the function to invoke on completion
  * @opaque: user data to pass to @callback
  * @destroy: the function to free @opaque
+ * @context: the context to run the async task. If %NULL, the default
+ *           context will be used.
  *
  * Attempt to listen to the address @addr. This method
  * will run in the background so the caller will regain
@@ -148,9 +155,11 @@ int qio_channel_socket_listen_sync(QIOChannelSocket *ioc,
  */
 void qio_channel_socket_listen_async(QIOChannelSocket *ioc,
                                      SocketAddress *addr,
+                                     int num,
                                      QIOTaskFunc callback,
                                      gpointer opaque,
-                                     GDestroyNotify destroy);
+                                     GDestroyNotify destroy,
+                                     GMainContext *context);
 
 
 /**
@@ -179,6 +188,8 @@ int qio_channel_socket_dgram_sync(QIOChannelSocket *ioc,
  * @callback: the function to invoke on completion
  * @opaque: user data to pass to @callback
  * @destroy: the function to free @opaque
+ * @context: the context to run the async task. If %NULL, the default
+ *           context will be used.
  *
  * Attempt to initialize a datagram socket bound to
  * @localAddr and communicating with peer @remoteAddr.
@@ -194,7 +205,8 @@ void qio_channel_socket_dgram_async(QIOChannelSocket *ioc,
                                     SocketAddress *remoteAddr,
                                     QIOTaskFunc callback,
                                     gpointer opaque,
-                                    GDestroyNotify destroy);
+                                    GDestroyNotify destroy,
+                                    GMainContext *context);
 
 
 /**

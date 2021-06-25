@@ -7,7 +7,7 @@
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2 of the License, or (at your option) any later version.
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -20,10 +20,12 @@
 
 #include "qemu/osdep.h"
 #include "cpu.h"
+#include "hw/core/tcg-cpu-ops.h"
 #include "mmu.h"
 #include "qemu/host-utils.h"
 #include "exec/exec-all.h"
 #include "exec/cpu_ldst.h"
+#include "exec/helper-proto.h"
 
 
 //#define CRIS_HELPER_DEBUG
@@ -53,15 +55,15 @@ void crisv10_cpu_do_interrupt(CPUState *cs)
     cris_cpu_do_interrupt(cs);
 }
 
-int cris_cpu_handle_mmu_fault(CPUState *cs, vaddr address, int rw,
-                              int mmu_idx)
+bool cris_cpu_tlb_fill(CPUState *cs, vaddr address, int size,
+                       MMUAccessType access_type, int mmu_idx,
+                       bool probe, uintptr_t retaddr)
 {
     CRISCPU *cpu = CRIS_CPU(cs);
 
     cs->exception_index = 0xaa;
     cpu->env.pregs[PR_EDA] = address;
-    cpu_dump_state(cs, stderr, fprintf, 0);
-    return 1;
+    cpu_loop_exit_restore(cs, retaddr);
 }
 
 #else /* !CONFIG_USER_ONLY */
@@ -76,33 +78,19 @@ static void cris_shift_ccs(CPUCRISState *env)
     env->pregs[PR_CCS] = ccs;
 }
 
-int cris_cpu_handle_mmu_fault(CPUState *cs, vaddr address, int rw,
-                              int mmu_idx)
+bool cris_cpu_tlb_fill(CPUState *cs, vaddr address, int size,
+                       MMUAccessType access_type, int mmu_idx,
+                       bool probe, uintptr_t retaddr)
 {
     CRISCPU *cpu = CRIS_CPU(cs);
     CPUCRISState *env = &cpu->env;
     struct cris_mmu_result res;
     int prot, miss;
-    int r = -1;
     target_ulong phy;
 
-    qemu_log_mask(CPU_LOG_MMU, "%s addr=%" VADDR_PRIx " pc=%x rw=%x\n",
-            __func__, address, env->pc, rw);
     miss = cris_mmu_translate(&res, env, address & TARGET_PAGE_MASK,
-                              rw, mmu_idx, 0);
-    if (miss) {
-        if (cs->exception_index == EXCP_BUSFAULT) {
-            cpu_abort(cs,
-                      "CRIS: Illegal recursive bus fault."
-                      "addr=%" VADDR_PRIx " rw=%d\n",
-                      address, rw);
-        }
-
-        env->pregs[PR_EDA] = address;
-        cs->exception_index = EXCP_BUSFAULT;
-        env->fault_vector = res.bf_vec;
-        r = 1;
-    } else {
+                              access_type, mmu_idx, 0);
+    if (likely(!miss)) {
         /*
          * Mask off the cache selection bit. The ETRAX busses do not
          * see the top bit.
@@ -111,15 +99,29 @@ int cris_cpu_handle_mmu_fault(CPUState *cs, vaddr address, int rw,
         prot = res.prot;
         tlb_set_page(cs, address & TARGET_PAGE_MASK, phy,
                      prot, mmu_idx, TARGET_PAGE_SIZE);
-        r = 0;
+        return true;
     }
-    if (r > 0) {
-        qemu_log_mask(CPU_LOG_MMU,
-                "%s returns %d irqreq=%x addr=%" VADDR_PRIx " phy=%x vec=%x"
-                " pc=%x\n", __func__, r, cs->interrupt_request, address,
-                res.phy, res.bf_vec, env->pc);
+
+    if (probe) {
+        return false;
     }
-    return r;
+
+    if (cs->exception_index == EXCP_BUSFAULT) {
+        cpu_abort(cs, "CRIS: Illegal recursive bus fault."
+                      "addr=%" VADDR_PRIx " access_type=%d\n",
+                      address, access_type);
+    }
+
+    env->pregs[PR_EDA] = address;
+    cs->exception_index = EXCP_BUSFAULT;
+    env->fault_vector = res.bf_vec;
+    if (retaddr) {
+        if (cpu_restore_state(cs, retaddr, true)) {
+            /* Evaluate flags after retranslation. */
+            helper_top_evaluate_flags(env);
+        }
+    }
+    cpu_loop_exit(cs);
 }
 
 void crisv10_cpu_do_interrupt(CPUState *cs)
@@ -240,7 +242,7 @@ void cris_cpu_do_interrupt(CPUState *cs)
         /* Exception starts with dslot cleared.  */
         env->dslot = 0;
     }
-	
+
     if (env->pregs[PR_CCS] & U_FLAG) {
         /* Swap stack pointers.  */
         env->pregs[PR_USP] = env->regs[R_SP];
@@ -273,10 +275,10 @@ hwaddr cris_cpu_get_phys_page_debug(CPUState *cs, vaddr addr)
     struct cris_mmu_result res;
     int miss;
 
-    miss = cris_mmu_translate(&res, &cpu->env, addr, 0, 0, 1);
+    miss = cris_mmu_translate(&res, &cpu->env, addr, MMU_DATA_LOAD, 0, 1);
     /* If D TLB misses, try I TLB.  */
     if (miss) {
-        miss = cris_mmu_translate(&res, &cpu->env, addr, 2, 0, 1);
+        miss = cris_mmu_translate(&res, &cpu->env, addr, MMU_INST_FETCH, 0, 1);
     }
 
     if (!miss) {
@@ -298,7 +300,7 @@ bool cris_cpu_exec_interrupt(CPUState *cs, int interrupt_request)
         && (env->pregs[PR_CCS] & I_FLAG)
         && !env->locked_irq) {
         cs->exception_index = EXCP_IRQ;
-        cc->do_interrupt(cs);
+        cc->tcg_ops->do_interrupt(cs);
         ret = true;
     }
     if (interrupt_request & CPU_INTERRUPT_NMI) {
@@ -310,7 +312,7 @@ bool cris_cpu_exec_interrupt(CPUState *cs, int interrupt_request)
         }
         if ((env->pregs[PR_CCS] & m_flag_archval)) {
             cs->exception_index = EXCP_NMI;
-            cc->do_interrupt(cs);
+            cc->tcg_ops->do_interrupt(cs);
             ret = true;
         }
     }

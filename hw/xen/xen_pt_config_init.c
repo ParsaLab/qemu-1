@@ -15,7 +15,7 @@
 #include "qemu/osdep.h"
 #include "qapi/error.h"
 #include "qemu/timer.h"
-#include "hw/xen/xen_backend.h"
+#include "hw/xen/xen-legacy-backend.h"
 #include "xen_pt.h"
 
 #define XEN_PT_MERGE_VALUE(value, data, val_mask) \
@@ -300,7 +300,9 @@ static int xen_pt_irqpin_reg_init(XenPCIPassthroughState *s,
                                   XenPTRegInfo *reg, uint32_t real_offset,
                                   uint32_t *data)
 {
-    *data = xen_pt_pci_read_intx(s);
+    if (s->real_device.irq) {
+        *data = xen_pt_pci_read_intx(s);
+    }
     return 0;
 }
 
@@ -358,7 +360,7 @@ static uint64_t xen_pt_get_bar_size(PCIIORegion *r)
 static XenPTBarFlag xen_pt_bar_reg_parse(XenPCIPassthroughState *s,
                                          int index)
 {
-    PCIDevice *d = &s->dev;
+    PCIDevice *d = PCI_DEVICE(s);
     XenPTRegion *region = NULL;
     PCIIORegion *r;
 
@@ -469,7 +471,7 @@ static int xen_pt_bar_reg_write(XenPCIPassthroughState *s, XenPTReg *cfg_entry,
 {
     XenPTRegInfo *reg = cfg_entry->reg;
     XenPTRegion *base = NULL;
-    PCIDevice *d = &s->dev;
+    PCIDevice *d = PCI_DEVICE(s);
     const PCIIORegion *r;
     uint32_t writable_mask = 0;
     uint32_t bar_emu_mask = 0;
@@ -504,6 +506,8 @@ static int xen_pt_bar_reg_write(XenPCIPassthroughState *s, XenPTReg *cfg_entry,
         bar_ro_mask = XEN_PT_BAR_IO_RO_MASK | (r_size - 1);
         break;
     case XEN_PT_BAR_FLAG_UPPER:
+        assert(index > 0);
+        r_size = d->io_regions[index - 1].size >> 32;
         bar_emu_mask = XEN_PT_BAR_ALLF;
         bar_ro_mask = r_size ? r_size - 1 : 0;
         break;
@@ -541,7 +545,7 @@ static int xen_pt_exp_rom_bar_reg_write(XenPCIPassthroughState *s,
 {
     XenPTRegInfo *reg = cfg_entry->reg;
     XenPTRegion *base = NULL;
-    PCIDevice *d = (PCIDevice *)&s->dev;
+    PCIDevice *d = PCI_DEVICE(s);
     uint32_t writable_mask = 0;
     uint32_t throughable_mask = get_throughable_mask(s, reg, valid_mask);
     pcibus_t r_size = 0;
@@ -1585,7 +1589,7 @@ static int xen_pt_pcie_size_init(XenPCIPassthroughState *s,
                                  const XenPTRegGroupInfo *grp_reg,
                                  uint32_t base_offset, uint8_t *size)
 {
-    PCIDevice *d = &s->dev;
+    PCIDevice *d = PCI_DEVICE(s);
     uint8_t version = get_capability_version(s, base_offset);
     uint8_t type = get_device_type(s, base_offset);
     uint8_t pcie_size = 0;
@@ -1618,7 +1622,7 @@ static int xen_pt_pcie_size_init(XenPCIPassthroughState *s,
         case PCI_EXP_TYPE_PCIE_BRIDGE:
         case PCI_EXP_TYPE_RC_EC:
         default:
-            XEN_PT_ERR(d, "Unsupported device/port type %#x.\n", type);
+            XEN_PT_ERR(d, "Unsupported device/port type 0x%x.\n", type);
             return -1;
         }
     }
@@ -1641,11 +1645,11 @@ static int xen_pt_pcie_size_init(XenPCIPassthroughState *s,
         case PCI_EXP_TYPE_PCIE_BRIDGE:
         case PCI_EXP_TYPE_RC_EC:
         default:
-            XEN_PT_ERR(d, "Unsupported device/port type %#x.\n", type);
+            XEN_PT_ERR(d, "Unsupported device/port type 0x%x.\n", type);
             return -1;
         }
     } else {
-        XEN_PT_ERR(d, "Unsupported capability version %#x.\n", version);
+        XEN_PT_ERR(d, "Unsupported capability version 0x%x.\n", version);
         return -1;
     }
 
@@ -2004,8 +2008,8 @@ static void xen_pt_config_reg_init(XenPCIPassthroughState *s,
 
 void xen_pt_config_init(XenPCIPassthroughState *s, Error **errp)
 {
+    ERRP_GUARD();
     int i, rc;
-    Error *err = NULL;
 
     QLIST_INIT(&s->reg_grps);
 
@@ -2048,10 +2052,9 @@ void xen_pt_config_init(XenPCIPassthroughState *s, Error **errp)
                                                   reg_grp_offset,
                                                   &reg_grp_entry->size);
             if (rc < 0) {
-                error_setg(&err, "Failed to initialize %d/%zu, type = 0x%x,"
+                error_setg(errp, "Failed to initialize %d/%zu, type = 0x%x,"
                            " rc: %d", i, ARRAY_SIZE(xen_pt_emu_reg_grps),
                            xen_pt_emu_reg_grps[i].grp_type, rc);
-                error_propagate(errp, err);
                 xen_pt_config_delete(s);
                 return;
             }
@@ -2064,13 +2067,14 @@ void xen_pt_config_init(XenPCIPassthroughState *s, Error **errp)
 
                 /* initialize capability register */
                 for (j = 0; regs->size != 0; j++, regs++) {
-                    xen_pt_config_reg_init(s, reg_grp_entry, regs, &err);
-                    if (err) {
-                        error_append_hint(&err, "Failed to init register %d"
-                                " offsets 0x%x in grp_type = 0x%x (%d/%zu)", j,
-                                regs->offset, xen_pt_emu_reg_grps[i].grp_type,
-                                i, ARRAY_SIZE(xen_pt_emu_reg_grps));
-                        error_propagate(errp, err);
+                    xen_pt_config_reg_init(s, reg_grp_entry, regs, errp);
+                    if (*errp) {
+                        error_append_hint(errp, "Failed to init register %d"
+                                          " offsets 0x%x in grp_type = 0x%x (%d/%zu)",
+                                          j,
+                                          regs->offset,
+                                          xen_pt_emu_reg_grps[i].grp_type,
+                                          i, ARRAY_SIZE(xen_pt_emu_reg_grps));
                         xen_pt_config_delete(s);
                         return;
                     }

@@ -129,11 +129,11 @@ To show some example invocations of command-line, we will use the
 following invocation of QEMU, with a QMP server running over UNIX
 socket::
 
-    $ ./x86_64-softmmu/qemu-system-x86_64 -display none -nodefconfig \
+    $ ./qemu-system-x86_64 -display none -no-user-config \
         -M q35 -nodefaults -m 512 \
         -blockdev node-name=node-A,driver=qcow2,file.driver=file,file.node-name=file,file.filename=./a.qcow2 \
         -device virtio-blk,drive=node-A,id=virtio0 \
-        -monitor stdio -qmp unix:/tmp/qmp-sock,server,nowait
+        -monitor stdio -qmp unix:/tmp/qmp-sock,server=on,wait=off
 
 The ``-blockdev`` command-line option, used above, is available from
 QEMU 2.9 onwards.  In the above invocation, notice the ``node-name``
@@ -506,26 +506,40 @@ Again, given our familiar disk image chain::
 
     [A] <-- [B] <-- [C] <-- [D]
 
-The ``drive-mirror`` (and its newer equivalent ``blockdev-mirror``) allows
-you to copy data from the entire chain into a single target image (which
-can be located on a different host).
+The ``drive-mirror`` (and its newer equivalent ``blockdev-mirror``)
+allows you to copy data from the entire chain into a single target image
+(which can be located on a different host), [E].
 
-Once a 'mirror' job has started, there are two possible actions while a
-``drive-mirror`` job is active:
+.. note::
 
-(1) Issuing the command ``block-job-cancel`` after it emits the event
-    ``BLOCK_JOB_CANCELLED``: will (after completing synchronization of
-    the content from the disk image chain to the target image, [E])
-    create a point-in-time (which is at the time of *triggering* the
-    cancel command) copy, contained in image [E], of the the entire disk
+    When you cancel an in-progress 'mirror' job *before* the source and
+    target are synchronized, ``block-job-cancel`` will emit the event
+    ``BLOCK_JOB_CANCELLED``.  However, note that if you cancel a
+    'mirror' job *after* it has indicated (via the event
+    ``BLOCK_JOB_READY``) that the source and target have reached
+    synchronization, then the event emitted by ``block-job-cancel``
+    changes to ``BLOCK_JOB_COMPLETED``.
+
+    Besides the 'mirror' job, the "active ``block-commit``" is the only
+    other block device job that emits the event ``BLOCK_JOB_READY``.
+    The rest of the block device jobs ('stream', "non-active
+    ``block-commit``", and 'backup') end automatically.
+
+So there are two possible actions to take, after a 'mirror' job has
+emitted the event ``BLOCK_JOB_READY``, indicating that the source and
+target have reached synchronization:
+
+(1) Issuing the command ``block-job-cancel`` (after it emits the event
+    ``BLOCK_JOB_COMPLETED``) will create a point-in-time (which is at
+    the time of *triggering* the cancel command) copy of the entire disk
     image chain (or only the top-most image, depending on the ``sync``
-    mode).
+    mode), contained in the target image [E]. One use case for this is
+    live VM migration with non-shared storage.
 
-(2) Issuing the command ``block-job-complete`` after it emits the event
-    ``BLOCK_JOB_COMPLETED``: will, after completing synchronization of
-    the content, adjust the guest device (i.e. live QEMU) to point to
-    the target image, and, causing all the new writes from this point on
-    to happen there.  One use case for this is live storage migration.
+(2) Issuing the command ``block-job-complete`` (after it emits the event
+    ``BLOCK_JOB_COMPLETED``) will adjust the guest device (i.e. live
+    QEMU) to point to the target image, [E], causing all the new writes
+    from this point on to happen there.
 
 About synchronization modes: The synchronization mode determines
 *which* part of the disk image chain will be copied to the target.
@@ -680,11 +694,11 @@ instance, with the following invocation.  (As noted earlier, for
 simplicity's sake, the destination QEMU is started on the same host, but
 it could be located elsewhere)::
 
-    $ ./x86_64-softmmu/qemu-system-x86_64 -display none -nodefconfig \
+    $ ./qemu-system-x86_64 -display none -no-user-config \
         -M q35 -nodefaults -m 512 \
         -blockdev node-name=node-TargetDisk,driver=qcow2,file.driver=file,file.node-name=file,file.filename=./target-disk.qcow2 \
         -device virtio-blk,drive=node-TargetDisk,id=virtio0 \
-        -S -monitor stdio -qmp unix:./qmp-sock2,server,nowait \
+        -S -monitor stdio -qmp unix:./qmp-sock2,server=on,wait=off \
         -incoming tcp:localhost:6666
 
 Given the disk image chain on source QEMU::

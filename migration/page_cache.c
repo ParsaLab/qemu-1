@@ -14,17 +14,11 @@
 
 #include "qemu/osdep.h"
 
-#include "qemu-common.h"
+#include "qapi/qmp/qerror.h"
+#include "qapi/error.h"
 #include "qemu/host-utils.h"
-#include "migration/page_cache.h"
-
-#ifdef DEBUG_CACHE
-#define DPRINTF(fmt, ...) \
-    do { fprintf(stdout, "cache: " fmt, ## __VA_ARGS__); } while (0)
-#else
-#define DPRINTF(fmt, ...) \
-    do { } while (0)
-#endif
+#include "page_cache.h"
+#include "trace.h"
 
 /* the page in cache will not be replaced in two cycles */
 #define CACHED_PAGE_LIFETIME 2
@@ -39,46 +33,47 @@ struct CacheItem {
 
 struct PageCache {
     CacheItem *page_cache;
-    unsigned int page_size;
-    int64_t max_num_items;
-    uint64_t max_item_age;
-    int64_t num_items;
+    size_t page_size;
+    size_t max_num_items;
+    size_t num_items;
 };
 
-PageCache *cache_init(int64_t num_pages, unsigned int page_size)
+PageCache *cache_init(uint64_t new_size, size_t page_size, Error **errp)
 {
     int64_t i;
-
+    size_t num_pages = new_size / page_size;
     PageCache *cache;
 
-    if (num_pages <= 0) {
-        DPRINTF("invalid number of pages\n");
+    if (new_size < page_size) {
+        error_setg(errp, QERR_INVALID_PARAMETER_VALUE, "cache size",
+                   "is smaller than one target page size");
+        return NULL;
+    }
+
+    /* round down to the nearest power of 2 */
+    if (!is_power_of_2(num_pages)) {
+        error_setg(errp, QERR_INVALID_PARAMETER_VALUE, "cache size",
+                   "is not a power of two number of pages");
         return NULL;
     }
 
     /* We prefer not to abort if there is no memory */
     cache = g_try_malloc(sizeof(*cache));
     if (!cache) {
-        DPRINTF("Failed to allocate cache\n");
+        error_setg(errp, "Failed to allocate cache");
         return NULL;
-    }
-    /* round down to the nearest power of 2 */
-    if (!is_power_of_2(num_pages)) {
-        num_pages = pow2floor(num_pages);
-        DPRINTF("rounding down to %" PRId64 "\n", num_pages);
     }
     cache->page_size = page_size;
     cache->num_items = 0;
-    cache->max_item_age = 0;
     cache->max_num_items = num_pages;
 
-    DPRINTF("Setting cache buckets to %" PRId64 "\n", cache->max_num_items);
+    trace_migration_pagecache_init(cache->max_num_items);
 
     /* We prefer not to abort if there is no memory */
     cache->page_cache = g_try_malloc((cache->max_num_items) *
                                      sizeof(*cache->page_cache));
     if (!cache->page_cache) {
-        DPRINTF("Failed to allocate cache->page_cache\n");
+        error_setg(errp, "Failed to allocate page cache");
         g_free(cache);
         return NULL;
     }
@@ -165,7 +160,7 @@ int cache_insert(PageCache *cache, uint64_t addr, const uint8_t *pdata,
     if (!it->it_data) {
         it->it_data = g_try_malloc(cache->page_size);
         if (!it->it_data) {
-            DPRINTF("Error allocating page\n");
+            trace_migration_pagecache_insert();
             return -1;
         }
         cache->num_items++;

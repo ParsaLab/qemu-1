@@ -20,13 +20,13 @@
 
 #include "qemu/osdep.h"
 #include "qapi/error.h"
-#include "qemu-common.h"
 #include "hw/pci/pci_bridge.h"
 #include "hw/pci/pcie.h"
 #include "hw/pci/msix.h"
 #include "hw/pci/msi.h"
 #include "hw/pci/pci_bus.h"
 #include "hw/pci/pcie_regs.h"
+#include "hw/pci/pcie_port.h"
 #include "qemu/range.h"
 
 //#define DEBUG_PCIE
@@ -68,22 +68,87 @@ pcie_cap_v1_fill(PCIDevice *dev, uint8_t port, uint8_t type, uint8_t version)
     pci_set_long(exp_cap + PCI_EXP_LNKCAP,
                  (port << PCI_EXP_LNKCAP_PN_SHIFT) |
                  PCI_EXP_LNKCAP_ASPMS_0S |
-                 PCI_EXP_LNK_MLW_1 |
-                 PCI_EXP_LNK_LS_25);
+                 QEMU_PCI_EXP_LNKCAP_MLW(QEMU_PCI_EXP_LNK_X1) |
+                 QEMU_PCI_EXP_LNKCAP_MLS(QEMU_PCI_EXP_LNK_2_5GT));
 
     pci_set_word(exp_cap + PCI_EXP_LNKSTA,
-                 PCI_EXP_LNK_MLW_1 | PCI_EXP_LNK_LS_25);
-
-    if (dev->cap_present & QEMU_PCIE_LNKSTA_DLLLA) {
-        pci_word_test_and_set_mask(exp_cap + PCI_EXP_LNKSTA,
-                                   PCI_EXP_LNKSTA_DLLLA);
-    }
+                 QEMU_PCI_EXP_LNKSTA_NLW(QEMU_PCI_EXP_LNK_X1) |
+                 QEMU_PCI_EXP_LNKSTA_CLS(QEMU_PCI_EXP_LNK_2_5GT));
 
     /* We changed link status bits over time, and changing them across
      * migrations is generally fine as hardware changes them too.
      * Let's not bother checking.
      */
     pci_set_word(cmask + PCI_EXP_LNKSTA, 0);
+}
+
+static void pcie_cap_fill_slot_lnk(PCIDevice *dev)
+{
+    PCIESlot *s = (PCIESlot *)object_dynamic_cast(OBJECT(dev), TYPE_PCIE_SLOT);
+    uint8_t *exp_cap = dev->config + dev->exp.exp_cap;
+
+    /* Skip anything that isn't a PCIESlot */
+    if (!s) {
+        return;
+    }
+
+    /* Clear and fill LNKCAP from what was configured above */
+    pci_long_test_and_clear_mask(exp_cap + PCI_EXP_LNKCAP,
+                                 PCI_EXP_LNKCAP_MLW | PCI_EXP_LNKCAP_SLS);
+    pci_long_test_and_set_mask(exp_cap + PCI_EXP_LNKCAP,
+                               QEMU_PCI_EXP_LNKCAP_MLW(s->width) |
+                               QEMU_PCI_EXP_LNKCAP_MLS(s->speed));
+
+    /*
+     * Link bandwidth notification is required for all root ports and
+     * downstream ports supporting links wider than x1 or multiple link
+     * speeds.
+     */
+    if (s->width > QEMU_PCI_EXP_LNK_X1 ||
+        s->speed > QEMU_PCI_EXP_LNK_2_5GT) {
+        pci_long_test_and_set_mask(exp_cap + PCI_EXP_LNKCAP,
+                                   PCI_EXP_LNKCAP_LBNC);
+    }
+
+    if (s->speed > QEMU_PCI_EXP_LNK_2_5GT) {
+        /*
+         * Hot-plug capable downstream ports and downstream ports supporting
+         * link speeds greater than 5GT/s must hardwire PCI_EXP_LNKCAP_DLLLARC
+         * to 1b.  PCI_EXP_LNKCAP_DLLLARC implies PCI_EXP_LNKSTA_DLLLA, which
+         * we also hardwire to 1b here.  2.5GT/s hot-plug slots should also
+         * technically implement this, but it's not done here for compatibility.
+         */
+        pci_long_test_and_set_mask(exp_cap + PCI_EXP_LNKCAP,
+                                   PCI_EXP_LNKCAP_DLLLARC);
+        /* the PCI_EXP_LNKSTA_DLLLA will be set in the hotplug function */
+
+        /*
+         * Target Link Speed defaults to the highest link speed supported by
+         * the component.  2.5GT/s devices are permitted to hardwire to zero.
+         */
+        pci_word_test_and_clear_mask(exp_cap + PCI_EXP_LNKCTL2,
+                                     PCI_EXP_LNKCTL2_TLS);
+        pci_word_test_and_set_mask(exp_cap + PCI_EXP_LNKCTL2,
+                                   QEMU_PCI_EXP_LNKCAP_MLS(s->speed) &
+                                   PCI_EXP_LNKCTL2_TLS);
+    }
+
+    /*
+     * 2.5 & 5.0GT/s can be fully described by LNKCAP, but 8.0GT/s is
+     * actually a reference to the highest bit supported in this register.
+     * We assume the device supports all link speeds.
+     */
+    if (s->speed > QEMU_PCI_EXP_LNK_5GT) {
+        pci_long_test_and_clear_mask(exp_cap + PCI_EXP_LNKCAP2, ~0U);
+        pci_long_test_and_set_mask(exp_cap + PCI_EXP_LNKCAP2,
+                                   PCI_EXP_LNKCAP2_SLS_2_5GB |
+                                   PCI_EXP_LNKCAP2_SLS_5_0GB |
+                                   PCI_EXP_LNKCAP2_SLS_8_0GB);
+        if (s->speed > QEMU_PCI_EXP_LNK_8GT) {
+            pci_long_test_and_set_mask(exp_cap + PCI_EXP_LNKCAP2,
+                                       PCI_EXP_LNKCAP2_SLS_16_0GB);
+        }
+    }
 }
 
 int pcie_cap_init(PCIDevice *dev, uint8_t offset,
@@ -106,6 +171,9 @@ int pcie_cap_init(PCIDevice *dev, uint8_t offset,
 
     /* Filling values common with v1 */
     pcie_cap_v1_fill(dev, port, type, PCI_EXP_FLAGS_VER2);
+
+    /* Fill link speed and width options */
+    pcie_cap_fill_slot_lnk(dev);
 
     /* Filling v2 specific values */
     pci_set_long(exp_cap + PCI_EXP_DEVCAP2,
@@ -155,7 +223,8 @@ pcie_endpoint_cap_common_init(PCIDevice *dev, uint8_t offset, uint8_t cap_size)
      * a regular Endpoint type is exposed on a root complex.  These
      * should instead be Root Complex Integrated Endpoints.
      */
-    if (pci_bus_is_express(dev->bus) && pci_bus_is_root(dev->bus)) {
+    if (pci_bus_is_express(pci_get_bus(dev))
+        && pci_bus_is_root(pci_get_bus(dev))) {
         type = PCI_EXP_TYPE_RC_END;
     }
 
@@ -308,18 +377,17 @@ static void pcie_cap_slot_event(PCIDevice *dev, PCIExpressHotPlugEvent event)
 {
     /* Minor optimization: if nothing changed - no event is needed. */
     if (pci_word_test_and_set_mask(dev->config + dev->exp.exp_cap +
-                                   PCI_EXP_SLTSTA, event)) {
+                                   PCI_EXP_SLTSTA, event) == event) {
         return;
     }
     hotplug_event_notify(dev);
 }
 
-static void pcie_cap_slot_hotplug_common(PCIDevice *hotplug_dev,
-                                         DeviceState *dev,
-                                         uint8_t **exp_cap, Error **errp)
+static void pcie_cap_slot_plug_common(PCIDevice *hotplug_dev, DeviceState *dev,
+                                      Error **errp)
 {
-    *exp_cap = hotplug_dev->config + hotplug_dev->exp.exp_cap;
-    uint16_t sltsta = pci_get_word(*exp_cap + PCI_EXP_SLTSTA);
+    uint8_t *exp_cap = hotplug_dev->config + hotplug_dev->exp.exp_cap;
+    uint16_t sltsta = pci_get_word(exp_cap + PCI_EXP_SLTSTA);
 
     PCIE_DEV_PRINTF(PCI_DEVICE(dev), "hotplug state: 0x%x\n", sltsta);
     if (sltsta & PCI_EXP_SLTSTA_EIS) {
@@ -330,13 +398,30 @@ static void pcie_cap_slot_hotplug_common(PCIDevice *hotplug_dev,
     }
 }
 
-void pcie_cap_slot_hotplug_cb(HotplugHandler *hotplug_dev, DeviceState *dev,
-                              Error **errp)
+void pcie_cap_slot_pre_plug_cb(HotplugHandler *hotplug_dev, DeviceState *dev,
+                               Error **errp)
 {
-    uint8_t *exp_cap;
-    PCIDevice *pci_dev = PCI_DEVICE(dev);
+    PCIDevice *hotplug_pdev = PCI_DEVICE(hotplug_dev);
+    uint8_t *exp_cap = hotplug_pdev->config + hotplug_pdev->exp.exp_cap;
+    uint32_t sltcap = pci_get_word(exp_cap + PCI_EXP_SLTCAP);
 
-    pcie_cap_slot_hotplug_common(PCI_DEVICE(hotplug_dev), dev, &exp_cap, errp);
+    /* Check if hot-plug is disabled on the slot */
+    if (dev->hotplugged && (sltcap & PCI_EXP_SLTCAP_HPC) == 0) {
+        error_setg(errp, "Hot-plug failed: unsupported by the port device '%s'",
+                         DEVICE(hotplug_pdev)->id);
+        return;
+    }
+
+    pcie_cap_slot_plug_common(PCI_DEVICE(hotplug_dev), dev, errp);
+}
+
+void pcie_cap_slot_plug_cb(HotplugHandler *hotplug_dev, DeviceState *dev,
+                           Error **errp)
+{
+    PCIDevice *hotplug_pdev = PCI_DEVICE(hotplug_dev);
+    uint8_t *exp_cap = hotplug_pdev->config + hotplug_pdev->exp.exp_cap;
+    PCIDevice *pci_dev = PCI_DEVICE(dev);
+    uint32_t lnkcap = pci_get_long(exp_cap + PCI_EXP_LNKCAP);
 
     /* Don't send event when device is enabled during qemu machine creation:
      * it is present on boot, no hotplug event is necessary. We do send an
@@ -344,6 +429,11 @@ void pcie_cap_slot_hotplug_cb(HotplugHandler *hotplug_dev, DeviceState *dev,
     if (!dev->hotplugged) {
         pci_word_test_and_set_mask(exp_cap + PCI_EXP_SLTSTA,
                                    PCI_EXP_SLTSTA_PDS);
+        if (pci_dev->cap_present & QEMU_PCIE_LNKSTA_DLLLA ||
+            (lnkcap & PCI_EXP_LNKCAP_DLLLARC)) {
+            pci_word_test_and_set_mask(exp_cap + PCI_EXP_LNKSTA,
+                                       PCI_EXP_LNKSTA_DLLLA);
+        }
         return;
     }
 
@@ -354,24 +444,59 @@ void pcie_cap_slot_hotplug_cb(HotplugHandler *hotplug_dev, DeviceState *dev,
     if (pci_get_function_0(pci_dev)) {
         pci_word_test_and_set_mask(exp_cap + PCI_EXP_SLTSTA,
                                    PCI_EXP_SLTSTA_PDS);
-        pcie_cap_slot_event(PCI_DEVICE(hotplug_dev),
+        if (pci_dev->cap_present & QEMU_PCIE_LNKSTA_DLLLA ||
+            (lnkcap & PCI_EXP_LNKCAP_DLLLARC)) {
+            pci_word_test_and_set_mask(exp_cap + PCI_EXP_LNKSTA,
+                                       PCI_EXP_LNKSTA_DLLLA);
+        }
+        pcie_cap_slot_event(hotplug_pdev,
                             PCI_EXP_HP_EV_PDC | PCI_EXP_HP_EV_ABP);
     }
 }
 
+void pcie_cap_slot_unplug_cb(HotplugHandler *hotplug_dev, DeviceState *dev,
+                             Error **errp)
+{
+    qdev_unrealize(dev);
+}
+
 static void pcie_unplug_device(PCIBus *bus, PCIDevice *dev, void *opaque)
 {
+    HotplugHandler *hotplug_ctrl = qdev_get_hotplug_handler(DEVICE(dev));
+
+    if (dev->partially_hotplugged) {
+        dev->qdev.pending_deleted_event = false;
+        return;
+    }
+    hotplug_handler_unplug(hotplug_ctrl, DEVICE(dev), &error_abort);
     object_unparent(OBJECT(dev));
 }
 
-void pcie_cap_slot_hot_unplug_request_cb(HotplugHandler *hotplug_dev,
-                                         DeviceState *dev, Error **errp)
+void pcie_cap_slot_unplug_request_cb(HotplugHandler *hotplug_dev,
+                                     DeviceState *dev, Error **errp)
 {
-    uint8_t *exp_cap;
+    Error *local_err = NULL;
     PCIDevice *pci_dev = PCI_DEVICE(dev);
-    PCIBus *bus = pci_dev->bus;
+    PCIBus *bus = pci_get_bus(pci_dev);
+    PCIDevice *hotplug_pdev = PCI_DEVICE(hotplug_dev);
+    uint8_t *exp_cap = hotplug_pdev->config + hotplug_pdev->exp.exp_cap;
+    uint32_t sltcap = pci_get_word(exp_cap + PCI_EXP_SLTCAP);
 
-    pcie_cap_slot_hotplug_common(PCI_DEVICE(hotplug_dev), dev, &exp_cap, errp);
+    /* Check if hot-unplug is disabled on the slot */
+    if ((sltcap & PCI_EXP_SLTCAP_HPC) == 0) {
+        error_setg(errp, "Hot-unplug failed: "
+                         "unsupported by the port device '%s'",
+                         DEVICE(hotplug_pdev)->id);
+        return;
+    }
+
+    pcie_cap_slot_plug_common(hotplug_pdev, dev, &local_err);
+    if (local_err) {
+        error_propagate(errp, local_err);
+        return;
+    }
+
+    dev->pending_deleted_event = true;
 
     /* In case user cancel the operation of multi-function hot-add,
      * remove the function that is unexposed to guest individually,
@@ -384,12 +509,12 @@ void pcie_cap_slot_hot_unplug_request_cb(HotplugHandler *hotplug_dev,
         return;
     }
 
-    pcie_cap_slot_push_attention_button(PCI_DEVICE(hotplug_dev));
+    pcie_cap_slot_push_attention_button(hotplug_pdev);
 }
 
 /* pci express slot for pci express root/downstream port
    PCI express capability slot registers */
-void pcie_cap_slot_init(PCIDevice *dev, uint16_t slot)
+void pcie_cap_slot_init(PCIDevice *dev, PCIESlot *s)
 {
     uint32_t pos = dev->exp.exp_cap;
 
@@ -399,13 +524,16 @@ void pcie_cap_slot_init(PCIDevice *dev, uint16_t slot)
     pci_long_test_and_clear_mask(dev->config + pos + PCI_EXP_SLTCAP,
                                  ~PCI_EXP_SLTCAP_PSN);
     pci_long_test_and_set_mask(dev->config + pos + PCI_EXP_SLTCAP,
-                               (slot << PCI_EXP_SLTCAP_PSN_SHIFT) |
+                               (s->slot << PCI_EXP_SLTCAP_PSN_SHIFT) |
                                PCI_EXP_SLTCAP_EIP |
-                               PCI_EXP_SLTCAP_HPS |
-                               PCI_EXP_SLTCAP_HPC |
                                PCI_EXP_SLTCAP_PIP |
                                PCI_EXP_SLTCAP_AIP |
                                PCI_EXP_SLTCAP_ABP);
+    if (s->hotplug) {
+        pci_long_test_and_set_mask(dev->config + pos + PCI_EXP_SLTCAP,
+                                   PCI_EXP_SLTCAP_HPS |
+                                   PCI_EXP_SLTCAP_HPC);
+    }
 
     if (dev->cap_present & QEMU_PCIE_SLTCAP_PCP) {
         pci_long_test_and_set_mask(dev->config + pos + PCI_EXP_SLTCAP,
@@ -443,7 +571,7 @@ void pcie_cap_slot_init(PCIDevice *dev, uint16_t slot)
     dev->exp.hpev_notified = false;
 
     qbus_set_hotplug_handler(BUS(pci_bridge_get_sec_bus(PCI_BRIDGE(dev))),
-                             DEVICE(dev), NULL);
+                             OBJECT(dev));
 }
 
 void pcie_cap_slot_reset(PCIDevice *dev)
@@ -494,14 +622,43 @@ void pcie_cap_slot_reset(PCIDevice *dev)
     hotplug_event_update_event_status(dev);
 }
 
+void pcie_cap_slot_get(PCIDevice *dev, uint16_t *slt_ctl, uint16_t *slt_sta)
+{
+    uint32_t pos = dev->exp.exp_cap;
+    uint8_t *exp_cap = dev->config + pos;
+    *slt_ctl = pci_get_word(exp_cap + PCI_EXP_SLTCTL);
+    *slt_sta = pci_get_word(exp_cap + PCI_EXP_SLTSTA);
+}
+
 void pcie_cap_slot_write_config(PCIDevice *dev,
+                                uint16_t old_slt_ctl, uint16_t old_slt_sta,
                                 uint32_t addr, uint32_t val, int len)
 {
     uint32_t pos = dev->exp.exp_cap;
     uint8_t *exp_cap = dev->config + pos;
     uint16_t sltsta = pci_get_word(exp_cap + PCI_EXP_SLTSTA);
+    uint32_t lnkcap = pci_get_long(exp_cap + PCI_EXP_LNKCAP);
 
     if (ranges_overlap(addr, len, pos + PCI_EXP_SLTSTA, 2)) {
+        /*
+         * Guests tend to clears all bits during init.
+         * If they clear bits that weren't set this is racy and will lose events:
+         * not a big problem for manual button presses, but a problem for us.
+         * As a work-around, detect this and revert status to what it was
+         * before the write.
+         *
+         * Note: in theory this can be detected as a duplicate button press
+         * which cancels the previous press. Does not seem to happen in
+         * practice as guests seem to only have this bug during init.
+         */
+#define PCIE_SLOT_EVENTS (PCI_EXP_SLTSTA_ABP | PCI_EXP_SLTSTA_PFD | \
+                          PCI_EXP_SLTSTA_MRLSC | PCI_EXP_SLTSTA_PDC | \
+                          PCI_EXP_SLTSTA_CC)
+
+        if (val & ~old_slt_sta & PCIE_SLOT_EVENTS) {
+            sltsta = (sltsta & ~PCIE_SLOT_EVENTS) | (old_slt_sta & PCIE_SLOT_EVENTS);
+            pci_set_word(exp_cap + PCI_EXP_SLTSTA, sltsta);
+        }
         hotplug_event_clear(dev);
     }
 
@@ -519,17 +676,28 @@ void pcie_cap_slot_write_config(PCIDevice *dev,
     }
 
     /*
-     * If the slot is polulated, power indicator is off and power
+     * If the slot is populated, power indicator is off and power
      * controller is off, it is safe to detach the devices.
+     *
+     * Note: don't detach if condition was already true:
+     * this is a work around for guests that overwrite
+     * control of powered off slots before powering them on.
      */
     if ((sltsta & PCI_EXP_SLTSTA_PDS) && (val & PCI_EXP_SLTCTL_PCC) &&
-        ((val & PCI_EXP_SLTCTL_PIC_OFF) == PCI_EXP_SLTCTL_PIC_OFF)) {
+        (val & PCI_EXP_SLTCTL_PIC_OFF) == PCI_EXP_SLTCTL_PIC_OFF &&
+        (!(old_slt_ctl & PCI_EXP_SLTCTL_PCC) ||
+        (old_slt_ctl & PCI_EXP_SLTCTL_PIC_OFF) != PCI_EXP_SLTCTL_PIC_OFF)) {
         PCIBus *sec_bus = pci_bridge_get_sec_bus(PCI_BRIDGE(dev));
         pci_for_each_device(sec_bus, pci_bus_num(sec_bus),
                             pcie_unplug_device, NULL);
 
         pci_word_test_and_clear_mask(exp_cap + PCI_EXP_SLTSTA,
                                      PCI_EXP_SLTSTA_PDS);
+        if (dev->cap_present & QEMU_PCIE_LNKSTA_DLLLA ||
+            (lnkcap & PCI_EXP_LNKCAP_DLLLARC)) {
+            pci_word_test_and_clear_mask(exp_cap + PCI_EXP_LNKSTA,
+                                         PCI_EXP_LNKSTA_DLLLA);
+        }
         pci_word_test_and_set_mask(exp_cap + PCI_EXP_SLTSTA,
                                        PCI_EXP_SLTSTA_PDC);
     }
@@ -727,6 +895,52 @@ void pcie_add_capability(PCIDevice *dev,
     memset(dev->cmask + offset, 0xFF, size);
 }
 
+/*
+ * Sync the PCIe Link Status negotiated speed and width of a bridge with the
+ * downstream device.  If downstream device is not present, re-write with the
+ * Link Capability fields.  If downstream device reports invalid width or
+ * speed, replace with minimum values (LnkSta fields are RsvdZ on VFs but such
+ * values interfere with PCIe native hotplug detecting new devices).  Limit
+ * width and speed to bridge capabilities for compatibility.  Use config_read
+ * to access the downstream device since it could be an assigned device with
+ * volatile link information.
+ */
+void pcie_sync_bridge_lnk(PCIDevice *bridge_dev)
+{
+    PCIBridge *br = PCI_BRIDGE(bridge_dev);
+    PCIBus *bus = pci_bridge_get_sec_bus(br);
+    PCIDevice *target = bus->devices[0];
+    uint8_t *exp_cap = bridge_dev->config + bridge_dev->exp.exp_cap;
+    uint16_t lnksta, lnkcap = pci_get_word(exp_cap + PCI_EXP_LNKCAP);
+
+    if (!target || !target->exp.exp_cap) {
+        lnksta = lnkcap;
+    } else {
+        lnksta = target->config_read(target,
+                                     target->exp.exp_cap + PCI_EXP_LNKSTA,
+                                     sizeof(lnksta));
+
+        if ((lnksta & PCI_EXP_LNKSTA_NLW) > (lnkcap & PCI_EXP_LNKCAP_MLW)) {
+            lnksta &= ~PCI_EXP_LNKSTA_NLW;
+            lnksta |= lnkcap & PCI_EXP_LNKCAP_MLW;
+        } else if (!(lnksta & PCI_EXP_LNKSTA_NLW)) {
+            lnksta |= QEMU_PCI_EXP_LNKSTA_NLW(QEMU_PCI_EXP_LNK_X1);
+        }
+
+        if ((lnksta & PCI_EXP_LNKSTA_CLS) > (lnkcap & PCI_EXP_LNKCAP_SLS)) {
+            lnksta &= ~PCI_EXP_LNKSTA_CLS;
+            lnksta |= lnkcap & PCI_EXP_LNKCAP_SLS;
+        } else if (!(lnksta & PCI_EXP_LNKSTA_CLS)) {
+            lnksta |= QEMU_PCI_EXP_LNKSTA_CLS(QEMU_PCI_EXP_LNK_2_5GT);
+        }
+    }
+
+    pci_word_test_and_clear_mask(exp_cap + PCI_EXP_LNKSTA,
+                                 PCI_EXP_LNKSTA_CLS | PCI_EXP_LNKSTA_NLW);
+    pci_word_test_and_set_mask(exp_cap + PCI_EXP_LNKSTA, lnksta &
+                               (PCI_EXP_LNKSTA_CLS | PCI_EXP_LNKSTA_NLW));
+}
+
 /**************************************************************************
  * pci express extended capability helper functions
  */
@@ -749,17 +963,58 @@ void pcie_dev_ser_num_init(PCIDevice *dev, uint16_t offset, uint64_t ser_num)
     pci_set_quad(dev->config + offset + pci_dsn_cap, ser_num);
 }
 
-void pcie_ats_init(PCIDevice *dev, uint16_t offset)
+void pcie_ats_init(PCIDevice *dev, uint16_t offset, bool aligned)
 {
     pcie_add_capability(dev, PCI_EXT_CAP_ID_ATS, 0x1,
                         offset, PCI_EXT_CAP_ATS_SIZEOF);
 
     dev->exp.ats_cap = offset;
 
-    /* Invalidate Queue Depth 0, Page Aligned Request 0 */
-    pci_set_word(dev->config + offset + PCI_ATS_CAP, 0);
+    /* Invalidate Queue Depth 0 */
+    if (aligned) {
+        pci_set_word(dev->config + offset + PCI_ATS_CAP,
+                     PCI_ATS_CAP_PAGE_ALIGNED);
+    }
     /* STU 0, Disabled by default */
     pci_set_word(dev->config + offset + PCI_ATS_CTRL, 0);
 
     pci_set_word(dev->wmask + dev->exp.ats_cap + PCI_ATS_CTRL, 0x800f);
+}
+
+/* ACS (Access Control Services) */
+void pcie_acs_init(PCIDevice *dev, uint16_t offset)
+{
+    bool is_downstream = pci_is_express_downstream_port(dev);
+    uint16_t cap_bits = 0;
+
+    /* For endpoints, only multifunction devs may have an ACS capability: */
+    assert(is_downstream ||
+           (dev->cap_present & QEMU_PCI_CAP_MULTIFUNCTION) ||
+           PCI_FUNC(dev->devfn));
+
+    pcie_add_capability(dev, PCI_EXT_CAP_ID_ACS, PCI_ACS_VER, offset,
+                        PCI_ACS_SIZEOF);
+    dev->exp.acs_cap = offset;
+
+    if (is_downstream) {
+        /*
+         * Downstream ports must implement SV, TB, RR, CR, UF, and DT (with
+         * caveats on the latter four that we ignore for simplicity).
+         * Endpoints may also implement a subset of ACS capabilities,
+         * but these are optional if the endpoint does not support
+         * peer-to-peer between functions and thus omitted here.
+         */
+        cap_bits = PCI_ACS_SV | PCI_ACS_TB | PCI_ACS_RR |
+            PCI_ACS_CR | PCI_ACS_UF | PCI_ACS_DT;
+    }
+
+    pci_set_word(dev->config + offset + PCI_ACS_CAP, cap_bits);
+    pci_set_word(dev->wmask + offset + PCI_ACS_CTRL, cap_bits);
+}
+
+void pcie_acs_reset(PCIDevice *dev)
+{
+    if (dev->exp.acs_cap) {
+        pci_set_word(dev->config + dev->exp.acs_cap + PCI_ACS_CTRL, 0);
+    }
 }

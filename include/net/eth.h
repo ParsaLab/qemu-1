@@ -31,6 +31,7 @@
 
 #define ETH_ALEN 6
 #define ETH_HLEN 14
+#define ETH_ZLEN 60     /* Min. octets in frame without FCS */
 
 struct eth_header {
     uint8_t  h_dest[ETH_ALEN];   /* destination eth addr */
@@ -177,6 +178,8 @@ struct tcp_hdr {
 #define TH_PUSH 0x08
 #define TH_ACK  0x10
 #define TH_URG  0x20
+#define TH_ECE  0x40
+#define TH_CWR  0x80
     u_short th_win;      /* window */
     u_short th_sum;      /* checksum */
     u_short th_urp;      /* urgent pointer */
@@ -184,6 +187,7 @@ struct tcp_hdr {
 
 #define ip6_nxt      ip6_ctlun.ip6_un1.ip6_un1_nxt
 #define ip6_ecn_acc  ip6_ctlun.ip6_un3.ip6_un3_ecn
+#define ip6_plen     ip6_ctlun.ip6_un1.ip6_un1_plen
 
 #define PKT_GET_ETH_HDR(p)        \
     ((struct eth_header *)(p))
@@ -194,7 +198,9 @@ struct tcp_hdr {
 #define PKT_GET_IP_HDR(p)         \
     ((struct ip_header *)(((uint8_t *)(p)) + eth_get_l2_hdr_length(p)))
 #define IP_HDR_GET_LEN(p)         \
-    ((((struct ip_header *)(p))->ip_ver_len & 0x0F) << 2)
+    ((ldub_p(p + offsetof(struct ip_header, ip_ver_len)) & 0x0F) << 2)
+#define IP_HDR_GET_P(p)                                           \
+    (ldub_p(p + offsetof(struct ip_header, ip_p)))
 #define PKT_GET_IP_HDR_LEN(p)     \
     (IP_HDR_GET_LEN(PKT_GET_IP_HDR(p)))
 #define PKT_GET_IP6_HDR(p)        \
@@ -416,5 +422,21 @@ eth_calc_ip6_pseudo_hdr_csum(struct ip6_header *iphdr,
 bool
 eth_parse_ipv6_hdr(const struct iovec *pkt, int pkt_frags,
                    size_t ip6hdr_off, eth_ip6_hdr_info *info);
+
+/**
+ * eth_pad_short_frame - pad a short frame to the minimum Ethernet frame length
+ *
+ * If the Ethernet frame size is shorter than 60 bytes, it will be padded to
+ * 60 bytes at the address @padded_pkt.
+ *
+ * @padded_pkt: buffer address to hold the padded frame
+ * @padded_buflen: pointer holding length of @padded_pkt. If the frame is
+ *                 padded, the length will be updated to the padded one.
+ * @pkt: address to hold the original Ethernet frame
+ * @pkt_size: size of the original Ethernet frame
+ * @return true if the frame is padded, otherwise false
+ */
+bool eth_pad_short_frame(uint8_t *padded_pkt, size_t *padded_buflen,
+                         const void *pkt, size_t pkt_size);
 
 #endif

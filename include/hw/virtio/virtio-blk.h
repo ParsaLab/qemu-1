@@ -19,10 +19,10 @@
 #include "hw/block/block.h"
 #include "sysemu/iothread.h"
 #include "sysemu/block-backend.h"
+#include "qom/object.h"
 
 #define TYPE_VIRTIO_BLK "virtio-blk-device"
-#define VIRTIO_BLK(obj) \
-        OBJECT_CHECK(VirtIOBlock, (obj), TYPE_VIRTIO_BLK)
+OBJECT_DECLARE_SIMPLE_TYPE(VirtIOBlock, VIRTIO_BLK)
 
 /* This is the last element of the write scatter-gather list */
 struct virtio_blk_inhdr
@@ -30,21 +30,27 @@ struct virtio_blk_inhdr
     unsigned char status;
 };
 
+#define VIRTIO_BLK_AUTO_NUM_QUEUES UINT16_MAX
+
 struct VirtIOBlkConf
 {
     BlockConf conf;
     IOThread *iothread;
     char *serial;
-    uint32_t scsi;
-    uint32_t config_wce;
     uint32_t request_merging;
     uint16_t num_queues;
+    uint16_t queue_size;
+    bool seg_max_adjust;
+    bool report_discard_granularity;
+    uint32_t max_discard_sectors;
+    uint32_t max_write_zeroes_sectors;
+    bool x_enable_wce_if_config_wce;
 };
 
 struct VirtIOBlockDataPlane;
 
 struct VirtIOBlockReq;
-typedef struct VirtIOBlock {
+struct VirtIOBlock {
     VirtIODevice parent_obj;
     BlockBackend *blk;
     void *rq;
@@ -56,13 +62,17 @@ typedef struct VirtIOBlock {
     bool dataplane_disabled;
     bool dataplane_started;
     struct VirtIOBlockDataPlane *dataplane;
-} VirtIOBlock;
+    uint64_t host_features;
+    size_t config_size;
+};
 
 typedef struct VirtIOBlockReq {
     VirtQueueElement elem;
     int64_t sector_num;
     VirtIOBlock *dev;
     VirtQueue *vq;
+    IOVDiscardUndo inhdr_undo;
+    IOVDiscardUndo outhdr_undo;
     struct virtio_blk_inhdr *in;
     struct virtio_blk_outhdr out;
     QEMUIOVector qiov;
@@ -81,5 +91,6 @@ typedef struct MultiReqBuffer {
 } MultiReqBuffer;
 
 bool virtio_blk_handle_vq(VirtIOBlock *s, VirtQueue *vq);
+void virtio_blk_process_queued_requests(VirtIOBlock *s, bool is_bh);
 
 #endif

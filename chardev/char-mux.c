@@ -21,14 +21,24 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
+
 #include "qemu/osdep.h"
 #include "qapi/error.h"
-#include "qemu-common.h"
+#include "qemu/module.h"
+#include "qemu/option.h"
 #include "chardev/char.h"
 #include "sysemu/block-backend.h"
-#include "chardev/char-mux.h"
+#include "sysemu/sysemu.h"
+#include "chardev-internal.h"
 
 /* MUX driver for serial I/O splitting */
+
+/*
+ * Set to false by suspend_mux_open.  Open events are delayed until
+ * resume_mux_open.  Usually suspend_mux_open is called before
+ * command line processing and resume_mux_open afterwards.
+ */
+static bool muxes_opened = true;
 
 /* Called with chr_write_lock held.  */
 static int mux_chr_write(Chardev *chr, const uint8_t *buf, int len)
@@ -114,12 +124,21 @@ static void mux_print_help(Chardev *chr)
     }
 }
 
-static void mux_chr_send_event(MuxChardev *d, int mux_nr, int event)
+static void mux_chr_send_event(MuxChardev *d, int mux_nr, QEMUChrEvent event)
 {
     CharBackend *be = d->backends[mux_nr];
 
     if (be && be->chr_event) {
         be->chr_event(be->opaque, event);
+    }
+}
+
+static void mux_chr_be_event(Chardev *chr, QEMUChrEvent event)
+{
+    MuxChardev *d = MUX_CHARDEV(chr);
+
+    if (d->focus != -1) {
+        mux_chr_send_event(d, d->focus, event);
     }
 }
 
@@ -220,14 +239,12 @@ static void mux_chr_read(void *opaque, const uint8_t *buf, int size)
         }
 }
 
-bool muxes_realized;
-
-void mux_chr_send_all_event(Chardev *chr, int event)
+void mux_chr_send_all_event(Chardev *chr, QEMUChrEvent event)
 {
     MuxChardev *d = MUX_CHARDEV(chr);
     int i;
 
-    if (!muxes_realized) {
+    if (!muxes_opened) {
         return;
     }
 
@@ -237,7 +254,7 @@ void mux_chr_send_all_event(Chardev *chr, int event)
     }
 }
 
-static void mux_chr_event(void *opaque, int event)
+static void mux_chr_event(void *opaque, QEMUChrEvent event)
 {
     mux_chr_send_all_event(CHARDEV(opaque), event);
 }
@@ -269,18 +286,18 @@ static void char_mux_finalize(Object *obj)
     qemu_chr_fe_deinit(&d->chr, false);
 }
 
-void mux_chr_set_handlers(Chardev *chr, GMainContext *context)
+static void mux_chr_update_read_handlers(Chardev *chr)
 {
     MuxChardev *d = MUX_CHARDEV(chr);
 
     /* Fix up the real driver with mux routines */
-    qemu_chr_fe_set_handlers(&d->chr,
-                             mux_chr_can_read,
-                             mux_chr_read,
-                             mux_chr_event,
-                             NULL,
-                             chr,
-                             context, true);
+    qemu_chr_fe_set_handlers_full(&d->chr,
+                                  mux_chr_can_read,
+                                  mux_chr_read,
+                                  mux_chr_event,
+                                  NULL,
+                                  chr,
+                                  chr->gcontext, true, false);
 }
 
 void mux_set_focus(Chardev *chr, int focus)
@@ -295,6 +312,7 @@ void mux_set_focus(Chardev *chr, int focus)
     }
 
     d->focus = focus;
+    chr->be = d->backends[focus];
     mux_chr_send_event(d, d->focus, CHR_EVENT_MUX_IN);
 }
 
@@ -317,7 +335,7 @@ static void qemu_chr_open_mux(Chardev *chr,
     /* only default to opened state if we've realized the initial
      * set of muxes
      */
-    *be_opened = muxes_realized;
+    *be_opened = muxes_opened;
     qemu_chr_fe_init(&d->chr, drv, errp);
 }
 
@@ -337,6 +355,54 @@ static void qemu_chr_parse_mux(QemuOpts *opts, ChardevBackend *backend,
     mux->chardev = g_strdup(chardev);
 }
 
+/**
+ * Called after processing of default and command-line-specified
+ * chardevs to deliver CHR_EVENT_OPENED events to any FEs attached
+ * to a mux chardev. This is done here to ensure that
+ * output/prompts/banners are only displayed for the FE that has
+ * focus when initial command-line processing/machine init is
+ * completed.
+ *
+ * After this point, any new FE attached to any new or existing
+ * mux will receive CHR_EVENT_OPENED notifications for the BE
+ * immediately.
+ */
+static void open_muxes(Chardev *chr)
+{
+    /* send OPENED to all already-attached FEs */
+    mux_chr_send_all_event(chr, CHR_EVENT_OPENED);
+
+    /*
+     * mark mux as OPENED so any new FEs will immediately receive
+     * OPENED event
+     */
+    chr->be_open = 1;
+}
+
+void suspend_mux_open(void)
+{
+    muxes_opened = false;
+}
+
+static int chardev_options_parsed_cb(Object *child, void *opaque)
+{
+    Chardev *chr = (Chardev *)child;
+    ChardevClass *class = CHARDEV_GET_CLASS(chr);
+
+    if (!chr->be_open && class->chr_options_parsed) {
+        class->chr_options_parsed(chr);
+    }
+
+    return 0;
+}
+
+void resume_mux_open(void)
+{
+    muxes_opened = true;
+    object_child_foreach(get_chardevs_root(),
+                         chardev_options_parsed_cb, NULL);
+}
+
 static void char_mux_class_init(ObjectClass *oc, void *data)
 {
     ChardevClass *cc = CHARDEV_CLASS(oc);
@@ -346,6 +412,9 @@ static void char_mux_class_init(ObjectClass *oc, void *data)
     cc->chr_write = mux_chr_write;
     cc->chr_accept_input = mux_chr_accept_input;
     cc->chr_add_watch = mux_chr_add_watch;
+    cc->chr_be_event = mux_chr_be_event;
+    cc->chr_options_parsed = open_muxes;
+    cc->chr_update_read_handler = mux_chr_update_read_handlers;
 }
 
 static const TypeInfo char_mux_type_info = {

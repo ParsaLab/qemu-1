@@ -6,7 +6,7 @@
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2 of the License, or (at your option) any later version.
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -24,12 +24,11 @@
 #include "io/channel.h"
 #include "io/task.h"
 #include "crypto/tlssession.h"
+#include "qom/object.h"
 
 #define TYPE_QIO_CHANNEL_TLS "qio-channel-tls"
-#define QIO_CHANNEL_TLS(obj)                                     \
-    OBJECT_CHECK(QIOChannelTLS, (obj), TYPE_QIO_CHANNEL_TLS)
+OBJECT_DECLARE_SIMPLE_TYPE(QIOChannelTLS, QIO_CHANNEL_TLS)
 
-typedef struct QIOChannelTLS QIOChannelTLS;
 
 /**
  * QIOChannelTLS
@@ -48,6 +47,7 @@ struct QIOChannelTLS {
     QIOChannel parent;
     QIOChannel *master;
     QCryptoTLSSession *session;
+    QIOChannelShutdown shutdown;
 };
 
 /**
@@ -116,6 +116,8 @@ qio_channel_tls_new_client(QIOChannel *master,
  * @func: the callback to invoke when completed
  * @opaque: opaque data to pass to @func
  * @destroy: optional callback to free @opaque
+ * @context: the context that TLS handshake will run with. If %NULL,
+ *           the default context will be used
  *
  * Perform the TLS session handshake. This method
  * will return immediately and the handshake will
@@ -126,7 +128,8 @@ qio_channel_tls_new_client(QIOChannel *master,
 void qio_channel_tls_handshake(QIOChannelTLS *ioc,
                                QIOTaskFunc func,
                                gpointer opaque,
-                               GDestroyNotify destroy);
+                               GDestroyNotify destroy,
+                               GMainContext *context);
 
 /**
  * qio_channel_tls_get_session:

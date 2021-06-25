@@ -16,14 +16,12 @@
 
 #include "qapi/qmp/qobject.h"
 
-typedef struct QBool {
-    QObject base;
+struct QBool {
+    struct QObjectBase_ base;
     bool value;
-} QBool;
+};
 
 QBool *qbool_from_bool(bool value);
 bool qbool_get_bool(const QBool *qb);
-QBool *qobject_to_qbool(const QObject *obj);
-void qbool_destroy_obj(QObject *obj);
 
 #endif /* QBOOL_H */

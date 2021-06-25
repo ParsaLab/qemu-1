@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 #
 # Pretty-printer for simple trace backend binary trace files
 #
@@ -10,7 +10,6 @@
 # For help see docs/devel/tracing.txt
 
 import struct
-import re
 import inspect
 from tracetool import read_events, Event
 from tracetool.backend.simple import is_string
@@ -44,7 +43,7 @@ def get_record(edict, idtoname, rechdr, fobj):
         rec = (name, rechdr[1], rechdr[3])
         try:
             event = edict[name]
-        except KeyError, e:
+        except KeyError as e:
             import sys
             sys.stderr.write('%s event is logged but is not declared ' \
                              'in the trace events file, try using ' \
@@ -69,7 +68,7 @@ def get_record(edict, idtoname, rechdr, fobj):
 def get_mapping(fobj):
     (event_id, ) = struct.unpack('=Q', fobj.read(8))
     (len, ) = struct.unpack('=L', fobj.read(4))
-    name = fobj.read(len)
+    name = fobj.read(len).decode()
 
     return (event_id, name)
 
@@ -168,14 +167,16 @@ class Analyzer(object):
 def process(events, log, analyzer, read_header=True):
     """Invoke an analyzer on each event in a log."""
     if isinstance(events, str):
-        events = read_events(open(events, 'r'))
+        events = read_events(open(events, 'r'), events)
     if isinstance(log, str):
         log = open(log, 'rb')
 
     if read_header:
         read_trace_header(log)
 
-    dropped_event = Event.build("Dropped_Event(uint64_t num_events_dropped)")
+    frameinfo = inspect.getframeinfo(inspect.currentframe())
+    dropped_event = Event.build("Dropped_Event(uint64_t num_events_dropped)",
+                                frameinfo.lineno + 1, frameinfo.filename)
     edict = {"dropped": dropped_event}
     idtoname = {dropped_event_id: "dropped"}
 
@@ -199,7 +200,7 @@ def process(events, log, analyzer, read_header=True):
         fn_argcount = len(inspect.getargspec(fn)[0]) - 1
         if fn_argcount == event_argcount + 1:
             # Include timestamp as first argument
-            return lambda _, rec: fn(*((rec[1:2],) + rec[3:3 + event_argcount]))
+            return lambda _, rec: fn(*(rec[1:2] + rec[3:3 + event_argcount]))
         elif fn_argcount == event_argcount + 2:
             # Include timestamp and pid
             return lambda _, rec: fn(*rec[1:3 + event_argcount])
@@ -233,7 +234,7 @@ def run(analyzer):
                          '<trace-file>\n' % sys.argv[0])
         sys.exit(1)
 
-    events = read_events(open(sys.argv[1], 'r'))
+    events = read_events(open(sys.argv[1], 'r'), sys.argv[1])
     process(events, sys.argv[2], analyzer, read_header=read_header)
 
 if __name__ == '__main__':
@@ -257,6 +258,6 @@ if __name__ == '__main__':
                 else:
                     fields.append('%s=0x%x' % (name, rec[i]))
                 i += 1
-            print ' '.join(fields)
+            print(' '.join(fields))
 
     run(Formatter())

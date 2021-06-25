@@ -10,15 +10,17 @@
 #include "qemu/osdep.h"
 #include "hw/arm/armv7m.h"
 #include "qapi/error.h"
-#include "qemu-common.h"
 #include "cpu.h"
 #include "hw/sysbus.h"
-#include "hw/arm/arm.h"
+#include "hw/arm/boot.h"
 #include "hw/loader.h"
+#include "hw/qdev-properties.h"
 #include "elf.h"
-#include "sysemu/qtest.h"
+#include "sysemu/reset.h"
 #include "qemu/error-report.h"
+#include "qemu/module.h"
 #include "exec/address-spaces.h"
+#include "target/arm/idau.h"
 
 /* Bitbanded IO.  Each word corresponds to a single bit.  */
 
@@ -133,14 +135,13 @@ static void armv7m_instance_init(Object *obj)
 
     memory_region_init(&s->container, obj, "armv7m-container", UINT64_MAX);
 
-    object_initialize(&s->nvic, sizeof(s->nvic), TYPE_NVIC);
-    qdev_set_parent_bus(DEVICE(&s->nvic), sysbus_get_default());
+    object_initialize_child(obj, "nvic", &s->nvic, TYPE_NVIC);
     object_property_add_alias(obj, "num-irq",
-                              OBJECT(&s->nvic), "num-irq", &error_abort);
+                              OBJECT(&s->nvic), "num-irq");
 
     for (i = 0; i < ARRAY_SIZE(s->bitband); i++) {
-        object_initialize(&s->bitband[i], sizeof(s->bitband[i]), TYPE_BITBAND);
-        qdev_set_parent_bus(DEVICE(&s->bitband[i]), sysbus_get_default());
+        object_initialize_child(obj, "bitband[*]", &s->bitband[i],
+                                TYPE_BITBAND);
     }
 }
 
@@ -158,20 +159,55 @@ static void armv7m_realize(DeviceState *dev, Error **errp)
 
     memory_region_add_subregion_overlap(&s->container, 0, s->board_memory, -1);
 
-    s->cpu = ARM_CPU(object_new(s->cpu_type));
-
-    object_property_set_link(OBJECT(s->cpu), OBJECT(&s->container), "memory",
-                             &error_abort);
-    object_property_set_bool(OBJECT(s->cpu), true, "realized", &err);
+    s->cpu = ARM_CPU(object_new_with_props(s->cpu_type, OBJECT(s), "cpu",
+                                           &err, NULL));
     if (err != NULL) {
         error_propagate(errp, err);
         return;
     }
 
+    object_property_set_link(OBJECT(s->cpu), "memory", OBJECT(&s->container),
+                             &error_abort);
+    if (object_property_find(OBJECT(s->cpu), "idau")) {
+        object_property_set_link(OBJECT(s->cpu), "idau", s->idau,
+                                 &error_abort);
+    }
+    if (object_property_find(OBJECT(s->cpu), "init-svtor")) {
+        if (!object_property_set_uint(OBJECT(s->cpu), "init-svtor",
+                                      s->init_svtor, errp)) {
+            return;
+        }
+    }
+    if (object_property_find(OBJECT(s->cpu), "start-powered-off")) {
+        if (!object_property_set_bool(OBJECT(s->cpu), "start-powered-off",
+                                      s->start_powered_off, errp)) {
+            return;
+        }
+    }
+    if (object_property_find(OBJECT(s->cpu), "vfp")) {
+        if (!object_property_set_bool(OBJECT(s->cpu), "vfp", s->vfp, errp)) {
+            return;
+        }
+    }
+    if (object_property_find(OBJECT(s->cpu), "dsp")) {
+        if (!object_property_set_bool(OBJECT(s->cpu), "dsp", s->dsp, errp)) {
+            return;
+        }
+    }
+
+    /*
+     * Tell the CPU where the NVIC is; it will fail realize if it doesn't
+     * have one. Similarly, tell the NVIC where its CPU is.
+     */
+    s->cpu->env.nvic = &s->nvic;
+    s->nvic.cpu = s->cpu;
+
+    if (!qdev_realize(DEVICE(s->cpu), NULL, errp)) {
+        return;
+    }
+
     /* Note that we must realize the NVIC after the CPU */
-    object_property_set_bool(OBJECT(&s->nvic), true, "realized", &err);
-    if (err != NULL) {
-        error_propagate(errp, err);
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->nvic), errp)) {
         return;
     }
 
@@ -181,35 +217,36 @@ static void armv7m_realize(DeviceState *dev, Error **errp)
      */
     qdev_pass_gpios(DEVICE(&s->nvic), dev, NULL);
     qdev_pass_gpios(DEVICE(&s->nvic), dev, "SYSRESETREQ");
+    qdev_pass_gpios(DEVICE(&s->nvic), dev, "NMI");
 
     /* Wire the NVIC up to the CPU */
     sbd = SYS_BUS_DEVICE(&s->nvic);
     sysbus_connect_irq(sbd, 0,
                        qdev_get_gpio_in(DEVICE(s->cpu), ARM_CPU_IRQ));
-    s->cpu->env.nvic = &s->nvic;
 
-    memory_region_add_subregion(&s->container, 0xe000e000,
+    memory_region_add_subregion(&s->container, 0xe0000000,
                                 sysbus_mmio_get_region(sbd, 0));
 
     for (i = 0; i < ARRAY_SIZE(s->bitband); i++) {
-        Object *obj = OBJECT(&s->bitband[i]);
-        SysBusDevice *sbd = SYS_BUS_DEVICE(&s->bitband[i]);
+        if (s->enable_bitband) {
+            Object *obj = OBJECT(&s->bitband[i]);
+            SysBusDevice *sbd = SYS_BUS_DEVICE(&s->bitband[i]);
 
-        object_property_set_int(obj, bitband_input_addr[i], "base", &err);
-        if (err != NULL) {
-            error_propagate(errp, err);
-            return;
-        }
-        object_property_set_link(obj, OBJECT(s->board_memory),
-                                 "source-memory", &error_abort);
-        object_property_set_bool(obj, true, "realized", &err);
-        if (err != NULL) {
-            error_propagate(errp, err);
-            return;
-        }
+            if (!object_property_set_int(obj, "base",
+                                         bitband_input_addr[i], errp)) {
+                return;
+            }
+            object_property_set_link(obj, "source-memory",
+                                     OBJECT(s->board_memory), &error_abort);
+            if (!sysbus_realize(SYS_BUS_DEVICE(obj), errp)) {
+                return;
+            }
 
-        memory_region_add_subregion(&s->container, bitband_output_addr[i],
-                                    sysbus_mmio_get_region(sbd, 0));
+            memory_region_add_subregion(&s->container, bitband_output_addr[i],
+                                        sysbus_mmio_get_region(sbd, 0));
+        } else {
+            object_unparent(OBJECT(&s->bitband[i]));
+        }
     }
 }
 
@@ -217,6 +254,13 @@ static Property armv7m_properties[] = {
     DEFINE_PROP_STRING("cpu-type", ARMv7MState, cpu_type),
     DEFINE_PROP_LINK("memory", ARMv7MState, board_memory, TYPE_MEMORY_REGION,
                      MemoryRegion *),
+    DEFINE_PROP_LINK("idau", ARMv7MState, idau, TYPE_IDAU_INTERFACE, Object *),
+    DEFINE_PROP_UINT32("init-svtor", ARMv7MState, init_svtor, 0),
+    DEFINE_PROP_BOOL("enable-bitband", ARMv7MState, enable_bitband, false),
+    DEFINE_PROP_BOOL("start-powered-off", ARMv7MState, start_powered_off,
+                     false),
+    DEFINE_PROP_BOOL("vfp", ARMv7MState, vfp, true),
+    DEFINE_PROP_BOOL("dsp", ARMv7MState, dsp, true),
     DEFINE_PROP_END_OF_LIST(),
 };
 
@@ -225,7 +269,7 @@ static void armv7m_class_init(ObjectClass *klass, void *data)
     DeviceClass *dc = DEVICE_CLASS(klass);
 
     dc->realize = armv7m_realize;
-    dc->props = armv7m_properties;
+    device_class_set_props(dc, armv7m_properties);
 }
 
 static const TypeInfo armv7m_info = {
@@ -243,33 +287,14 @@ static void armv7m_reset(void *opaque)
     cpu_reset(CPU(cpu));
 }
 
-/* Init CPU and memory for a v7-M based board.
-   mem_size is in bytes.
-   Returns the ARMv7M device.  */
-
-DeviceState *armv7m_init(MemoryRegion *system_memory, int mem_size, int num_irq,
-                         const char *kernel_filename, const char *cpu_type)
-{
-    DeviceState *armv7m;
-
-    armv7m = qdev_create(NULL, TYPE_ARMV7M);
-    qdev_prop_set_uint32(armv7m, "num-irq", num_irq);
-    qdev_prop_set_string(armv7m, "cpu-type", cpu_type);
-    object_property_set_link(OBJECT(armv7m), OBJECT(get_system_memory()),
-                                     "memory", &error_abort);
-    /* This will exit with an error if the user passed us a bad cpu_type */
-    qdev_init_nofail(armv7m);
-
-    armv7m_load_kernel(ARM_CPU(first_cpu), kernel_filename, mem_size);
-    return armv7m;
-}
-
 void armv7m_load_kernel(ARMCPU *cpu, const char *kernel_filename, int mem_size)
 {
     int image_size;
     uint64_t entry;
-    uint64_t lowaddr;
     int big_endian;
+    AddressSpace *as;
+    int asidx;
+    CPUState *cs = CPU(cpu);
 
 #ifdef TARGET_WORDS_BIGENDIAN
     big_endian = 1;
@@ -277,17 +302,20 @@ void armv7m_load_kernel(ARMCPU *cpu, const char *kernel_filename, int mem_size)
     big_endian = 0;
 #endif
 
-    if (!kernel_filename && !qtest_enabled()) {
-        fprintf(stderr, "Guest image must be specified (using -kernel)\n");
-        exit(1);
+    if (arm_feature(&cpu->env, ARM_FEATURE_EL3)) {
+        asidx = ARMASIdx_S;
+    } else {
+        asidx = ARMASIdx_NS;
     }
+    as = cpu_get_address_space(cs, asidx);
 
     if (kernel_filename) {
-        image_size = load_elf(kernel_filename, NULL, NULL, &entry, &lowaddr,
-                              NULL, big_endian, EM_ARM, 1, 0);
+        image_size = load_elf_as(kernel_filename, NULL, NULL, NULL,
+                                 &entry, NULL, NULL,
+                                 NULL, big_endian, EM_ARM, 1, 0, as);
         if (image_size < 0) {
-            image_size = load_image_targphys(kernel_filename, 0, mem_size);
-            lowaddr = 0;
+            image_size = load_image_targphys_as(kernel_filename, 0,
+                                                mem_size, as);
         }
         if (image_size < 0) {
             error_report("Could not load kernel '%s'", kernel_filename);
@@ -318,7 +346,7 @@ static void bitband_class_init(ObjectClass *klass, void *data)
     DeviceClass *dc = DEVICE_CLASS(klass);
 
     dc->realize = bitband_realize;
-    dc->props = bitband_properties;
+    device_class_set_props(dc, bitband_properties);
 }
 
 static const TypeInfo bitband_info = {

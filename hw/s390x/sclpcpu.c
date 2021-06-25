@@ -12,9 +12,10 @@
  * option) any later version.  See the COPYING file in the top-level directory.
  *
  */
+
 #include "qemu/osdep.h"
-#include "sysemu/sysemu.h"
 #include "hw/s390x/sclp.h"
+#include "qemu/module.h"
 #include "hw/s390x/event-facility.h"
 #include "cpu.h"
 #include "sysemu/cpus.h"
@@ -37,12 +38,12 @@ void raise_irq_cpu_hotplug(void)
     sclp_service_interrupt(0);
 }
 
-static unsigned int send_mask(void)
+static sccb_mask_t send_mask(void)
 {
     return SCLP_EVENT_MASK_CONFIG_MGT_DATA;
 }
 
-static unsigned int receive_mask(void)
+static sccb_mask_t receive_mask(void)
 {
     return 0;
 }

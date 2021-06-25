@@ -11,9 +11,7 @@
 #ifndef QAPI_CLONE_VISITOR_H
 #define QAPI_CLONE_VISITOR_H
 
-#include "qemu/typedefs.h"
 #include "qapi/visitor.h"
-#include "qapi-visit.h"
 
 /*
  * The clone visitor is for direct use only by the QAPI_CLONE() macro;
@@ -22,10 +20,10 @@
  */
 typedef struct QapiCloneVisitor QapiCloneVisitor;
 
-void *qapi_clone(const void *src, void (*visit_type)(Visitor *, const char *,
+void *qapi_clone(const void *src, bool (*visit_type)(Visitor *, const char *,
                                                      void **, Error **));
 void qapi_clone_members(void *dst, const void *src, size_t sz,
-                        void (*visit_type_members)(Visitor *, void *,
+                        bool (*visit_type_members)(Visitor *, void *,
                                                    Error **));
 
 /*
@@ -36,7 +34,7 @@ void qapi_clone_members(void *dst, const void *src, size_t sz,
  */
 #define QAPI_CLONE(type, src)                                           \
     ((type *)qapi_clone(src,                                            \
-                        (void (*)(Visitor *, const char *, void**,      \
+                        (bool (*)(Visitor *, const char *, void **,     \
                                   Error **))visit_type_ ## type))
 
 /*
@@ -47,7 +45,7 @@ void qapi_clone_members(void *dst, const void *src, size_t sz,
  */
 #define QAPI_CLONE_MEMBERS(type, dst, src)                              \
     qapi_clone_members(dst, src, sizeof(type),                          \
-                       (void (*)(Visitor *, void *,                     \
+                       (bool (*)(Visitor *, void *,                     \
                                  Error **))visit_type_ ## type ## _members)
 
 #endif

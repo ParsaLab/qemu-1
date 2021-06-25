@@ -4,7 +4,7 @@
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2 of the License, or (at your option) any later version.
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -19,6 +19,8 @@
 
 #include "cpu.h"
 #include "exec/exec-all.h"
+#include "fpu/softfloat-helpers.h"
+#include "qemu/qemu-print.h"
 
 enum {
     TLBRET_DIRTY = -4,
@@ -31,7 +33,7 @@ enum {
 #if defined(CONFIG_SOFTMMU)
 static int get_physical_address(CPUTriCoreState *env, hwaddr *physical,
                                 int *prot, target_ulong address,
-                                int rw, int access_type)
+                                MMUAccessType access_type, int mmu_idx)
 {
     int ret = TLBRET_MATCH;
 
@@ -39,6 +41,20 @@ static int get_physical_address(CPUTriCoreState *env, hwaddr *physical,
     *prot = PAGE_READ | PAGE_WRITE | PAGE_EXEC;
 
     return ret;
+}
+
+hwaddr tricore_cpu_get_phys_page_debug(CPUState *cs, vaddr addr)
+{
+    TriCoreCPU *cpu = TRICORE_CPU(cs);
+    hwaddr phys_addr;
+    int prot;
+    int mmu_idx = cpu_mmu_index(&cpu->env, false);
+
+    if (get_physical_address(&cpu->env, &phys_addr, &prot, addr,
+                             MMU_DATA_LOAD, mmu_idx)) {
+        return -1;
+    }
+    return phys_addr;
 }
 #endif
 
@@ -48,61 +64,58 @@ static void raise_mmu_exception(CPUTriCoreState *env, target_ulong address,
 {
 }
 
-int cpu_tricore_handle_mmu_fault(CPUState *cs, target_ulong address,
-                                 int rw, int mmu_idx)
+bool tricore_cpu_tlb_fill(CPUState *cs, vaddr address, int size,
+                          MMUAccessType rw, int mmu_idx,
+                          bool probe, uintptr_t retaddr)
 {
     TriCoreCPU *cpu = TRICORE_CPU(cs);
     CPUTriCoreState *env = &cpu->env;
     hwaddr physical;
     int prot;
-    int access_type;
     int ret = 0;
 
     rw &= 1;
-    access_type = ACCESS_INT;
     ret = get_physical_address(env, &physical, &prot,
-                               address, rw, access_type);
-    qemu_log_mask(CPU_LOG_MMU, "%s address=" TARGET_FMT_lx " ret %d physical " TARGET_FMT_plx
-                  " prot %d\n", __func__, address, ret, physical, prot);
+                               address, rw, mmu_idx);
+
+    qemu_log_mask(CPU_LOG_MMU, "%s address=" TARGET_FMT_lx " ret %d physical "
+                  TARGET_FMT_plx " prot %d\n",
+                  __func__, (target_ulong)address, ret, physical, prot);
 
     if (ret == TLBRET_MATCH) {
         tlb_set_page(cs, address & TARGET_PAGE_MASK,
                      physical & TARGET_PAGE_MASK, prot | PAGE_EXEC,
                      mmu_idx, TARGET_PAGE_SIZE);
-        ret = 0;
-    } else if (ret < 0) {
+        return true;
+    } else {
+        assert(ret < 0);
+        if (probe) {
+            return false;
+        }
         raise_mmu_exception(env, address, rw, ret);
-        ret = 1;
+        cpu_loop_exit_restore(cs, retaddr);
     }
-
-    return ret;
 }
 
 static void tricore_cpu_list_entry(gpointer data, gpointer user_data)
 {
     ObjectClass *oc = data;
-    CPUListState *s = user_data;
     const char *typename;
     char *name;
 
     typename = object_class_get_name(oc);
     name = g_strndup(typename, strlen(typename) - strlen("-" TYPE_TRICORE_CPU));
-    (*s->cpu_fprintf)(s->file, "  %s\n",
-                      name);
+    qemu_printf("  %s\n", name);
     g_free(name);
 }
 
-void tricore_cpu_list(FILE *f, fprintf_function cpu_fprintf)
+void tricore_cpu_list(void)
 {
-    CPUListState s = {
-        .file = f,
-        .cpu_fprintf = cpu_fprintf,
-    };
     GSList *list;
 
-    list = object_class_get_list(TYPE_TRICORE_CPU, false);
-    (*cpu_fprintf)(f, "Available CPUs:\n");
-    g_slist_foreach(list, tricore_cpu_list_entry, &s);
+    list = object_class_get_list_sorted(TYPE_TRICORE_CPU, false);
+    qemu_printf("Available CPUs:\n");
+    g_slist_foreach(list, tricore_cpu_list_entry, NULL);
     g_slist_free(list);
 }
 

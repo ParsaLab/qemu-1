@@ -19,11 +19,13 @@
  */
 
 #include "qemu/osdep.h"
-#include "hw/hw.h"
 #include "hw/i2c/i2c.h"
+#include "hw/irq.h"
+#include "migration/vmstate.h"
 #include "tmp105.h"
 #include "qapi/error.h"
 #include "qapi/visitor.h"
+#include "qemu/module.h"
 
 static void tmp105_interrupt_update(TMP105State *s)
 {
@@ -39,16 +41,40 @@ static void tmp105_alarm_update(TMP105State *s)
             return;
     }
 
-    if ((s->config >> 1) & 1) {					/* TM */
-        if (s->temperature >= s->limit[1])
-            s->alarm = 1;
-        else if (s->temperature < s->limit[0])
-            s->alarm = 1;
+    if (s->config >> 1 & 1) {
+        /*
+         * TM == 1 : Interrupt mode. We signal Alert when the
+         * temperature rises above T_high, and expect the guest to clear
+         * it (eg by reading a device register).
+         */
+        if (s->detect_falling) {
+            if (s->temperature < s->limit[0]) {
+                s->alarm = 1;
+                s->detect_falling = false;
+            }
+        } else {
+            if (s->temperature >= s->limit[1]) {
+                s->alarm = 1;
+                s->detect_falling = true;
+            }
+        }
     } else {
-        if (s->temperature >= s->limit[1])
-            s->alarm = 1;
-        else if (s->temperature < s->limit[0])
-            s->alarm = 0;
+        /*
+         * TM == 0 : Comparator mode. We signal Alert when the temperature
+         * rises above T_high, and stop signalling it when the temperature
+         * falls below T_low.
+         */
+        if (s->detect_falling) {
+            if (s->temperature < s->limit[0]) {
+                s->alarm = 0;
+                s->detect_falling = false;
+            }
+        } else {
+            if (s->temperature >= s->limit[1]) {
+                s->alarm = 1;
+                s->detect_falling = true;
+            }
+        }
     }
 
     tmp105_interrupt_update(s);
@@ -70,16 +96,13 @@ static void tmp105_set_temperature(Object *obj, Visitor *v, const char *name,
                                    void *opaque, Error **errp)
 {
     TMP105State *s = TMP105(obj);
-    Error *local_err = NULL;
     int64_t temp;
 
-    visit_type_int(v, name, &temp, &local_err);
-    if (local_err) {
-        error_propagate(errp, local_err);
+    if (!visit_type_int(v, name, &temp, errp)) {
         return;
     }
     if (temp >= 128000 || temp < -128000) {
-        error_setg(errp, "value %" PRId64 ".%03" PRIu64 " °C is out of range",
+        error_setg(errp, "value %" PRId64 ".%03" PRIu64 " C is out of range",
                    temp / 1000, temp % 1000);
         return;
     }
@@ -131,7 +154,7 @@ static void tmp105_write(TMP105State *s)
 
     case TMP105_REG_CONFIG:
         if (s->buf[0] & ~s->config & (1 << 0))			/* SD */
-            printf("%s: TMP105 shutdown\n", __FUNCTION__);
+            printf("%s: TMP105 shutdown\n", __func__);
         s->config = s->buf[0];
         s->faults = tmp105_faultq[(s->config >> 3) & 3];	/* F */
         tmp105_alarm_update(s);
@@ -147,7 +170,7 @@ static void tmp105_write(TMP105State *s)
     }
 }
 
-static int tmp105_rx(I2CSlave *i2c)
+static uint8_t tmp105_rx(I2CSlave *i2c)
 {
     TMP105State *s = TMP105(i2c);
 
@@ -198,6 +221,29 @@ static int tmp105_post_load(void *opaque, int version_id)
     return 0;
 }
 
+static bool detect_falling_needed(void *opaque)
+{
+    TMP105State *s = opaque;
+
+    /*
+     * We only need to migrate the detect_falling bool if it's set;
+     * for migration from older machines we assume that it is false
+     * (ie temperature is not out of range).
+     */
+    return s->detect_falling;
+}
+
+static const VMStateDescription vmstate_tmp105_detect_falling = {
+    .name = "TMP105/detect-falling",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .needed = detect_falling_needed,
+    .fields = (VMStateField[]) {
+        VMSTATE_BOOL(detect_falling, TMP105State),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
 static const VMStateDescription vmstate_tmp105 = {
     .name = "TMP105",
     .version_id = 0,
@@ -213,6 +259,10 @@ static const VMStateDescription vmstate_tmp105 = {
         VMSTATE_UINT8(alarm, TMP105State),
         VMSTATE_I2C_SLAVE(i2c, TMP105State),
         VMSTATE_END_OF_LIST()
+    },
+    .subsections = (const VMStateDescription*[]) {
+        &vmstate_tmp105_detect_falling,
+        NULL
     }
 };
 
@@ -225,26 +275,29 @@ static void tmp105_reset(I2CSlave *i2c)
     s->config = 0;
     s->faults = tmp105_faultq[(s->config >> 3) & 3];
     s->alarm = 0;
+    s->detect_falling = false;
+
+    s->limit[0] = 0x4b00; /* T_LOW, 75 degrees C */
+    s->limit[1] = 0x5000; /* T_HIGH, 80 degrees C */
 
     tmp105_interrupt_update(s);
 }
 
-static int tmp105_init(I2CSlave *i2c)
+static void tmp105_realize(DeviceState *dev, Error **errp)
 {
+    I2CSlave *i2c = I2C_SLAVE(dev);
     TMP105State *s = TMP105(i2c);
 
     qdev_init_gpio_out(&i2c->qdev, &s->pin, 1);
 
     tmp105_reset(&s->i2c);
-
-    return 0;
 }
 
 static void tmp105_initfn(Object *obj)
 {
     object_property_add(obj, "temperature", "int",
                         tmp105_get_temperature,
-                        tmp105_set_temperature, NULL, NULL, NULL);
+                        tmp105_set_temperature, NULL, NULL);
 }
 
 static void tmp105_class_init(ObjectClass *klass, void *data)
@@ -252,7 +305,7 @@ static void tmp105_class_init(ObjectClass *klass, void *data)
     DeviceClass *dc = DEVICE_CLASS(klass);
     I2CSlaveClass *k = I2C_SLAVE_CLASS(klass);
 
-    k->init = tmp105_init;
+    dc->realize = tmp105_realize;
     k->event = tmp105_event;
     k->recv = tmp105_rx;
     k->send = tmp105_tx;
