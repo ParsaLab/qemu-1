@@ -1,0 +1,40 @@
+name: native_build_job_definition
+description: Builds qemu
+inputs:
+  configure_args:
+    description: Configure argumnets
+    required: false
+  make_check_args:
+    description: Make arguments for extra check runs such as 'check-unit'
+    required: false
+  targets:
+    description: List of ISA guest targets to emulate and test
+    required: false
+runs:
+  steps:
+    - run: JOBS=$(expr $(nproc) + 1)
+    - run: mkdir build
+    - run: cd build
+    - name: Configure
+      env: 
+        TARGETS: ${{ inputs.targets }}
+        CONFIGURE_ARGS: ${{ inputs.configure_args }}
+      run: if test -n "$TARGETS";
+      then
+        ../configure --enable-werror --disable-docs $CONFIGURE_ARGS --target-list="$TARGETS" ;
+      else
+        ../configure --enable-werror --disable-docs $CONFIGURE_ARGS ;
+      fi || { cat config.log meson-logs/meson-log.txt && exit 1; }
+    - name: LD JOBS
+      run: if test -n "$LD_JOBS";
+      then
+        meson configure . -Dbackend_max_links="$LD_JOBS" ;
+      fi || exit 1;
+    - name: Make base
+      run: make -j"$JOBS"
+    - name: Make check
+      if: ${{ inputs.make_check_args }}
+      env: 
+        MAKE_CHECK_ARGS: ${{ inputs.make_check_args }}
+      run: make -j"$JOBS" $MAKE_CHECK_ARGS ;
+
