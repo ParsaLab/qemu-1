@@ -37,25 +37,25 @@ jobs:
       - run: mkdir build
       - run: cd build
       - name: Configure
-        run: >-
-        if test -n "$TARGETS";
-        then
+        run:
+        if test -n "$TARGETS"; 
+        then \
           ../configure --enable-werror --disable-docs $CONFIGURE_ARGS --target-list="$TARGETS" ;
-        else
+        else \
           ../configure --enable-werror --disable-docs $CONFIGURE_ARGS ;
         fi || { cat config.log meson-logs/meson-log.txt && exit 1; }
       - name: Run meson configure LD_JOBS
-        run: >-
+        run:
         if test -n "$LD_JOBS";
-        then
+        then \
           meson configure . -Dbackend_max_links="$LD_JOBS" ;
         fi || exit 1;
       - name: Make base
         run: make -j"$JOBS"
       - name: Run checks if required
-        run: >-
+        run:
         if test -n "$MAKE_CHECK_ARGS";
-        then
+        then \
           make -j"$JOBS" $MAKE_CHECK_ARGS ;
         fi
       - name: Save and upload artifact
