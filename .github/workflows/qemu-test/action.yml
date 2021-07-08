@@ -16,3 +16,4 @@ runs:
       env: 
         MAKE_CHECK_ARGS: ${{ inputs.make_check_args }}
       run: make NINJA=":" $MAKE_CHECK_ARGS
+

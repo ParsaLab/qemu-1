@@ -1,0 +1,32 @@
+#jobs:
+#   build-system-ubuntu:
+#     runs-on: ubuntu-latest
+#     name: Configure and build for Ubuntu20.04
+#     steps:
+#       - name: Configure and Build
+#         uses: actions/qemu-build@v1
+#         with:
+#           targets: aarch64-softmmu
+#           configure_args: --enable-docs --enable-fdt=system --enable-slirp=system
+#           make_check_args: check-build
+#       - name: Save and upload artifact
+#         uses: actions/upload-artifact@v2
+#         with:
+#           retention-days: 2
+#           name: build-system-ubuntu
+#           path: build
+#
+#   check-system-ubuntu:
+#     runs-on: ubuntu-latest
+#     name: Runs basic tests for Ubuntu
+#     needs: build-system-ubuntu
+#     steps:
+#       - name: Download artifact from build
+#         uses: actions/download-artifact@v2
+#         with:
+#           name: build-system-ubuntu
+#       - name: Run tests
+#         uses: actions/qemu-test@v1
+#         with:
+#           make_check_args: check 
+#
