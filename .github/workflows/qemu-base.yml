@@ -70,8 +70,8 @@ jobs:
     strategy:
       matrix:
         include:
-          make-check-args: check
-          build-name: build-system-ubuntu
+          - make-check-args: check
+            build-name: build-system-ubuntu
     env: 
         MAKE_CHECK_ARGS: ${{ matrix.make-check-args }}
     steps:
