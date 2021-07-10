@@ -5,6 +5,7 @@ on:
     branches:
       - master
       - dev
+      - dev-migrate-github-actions
   pull_request:
     branches:
       - master
