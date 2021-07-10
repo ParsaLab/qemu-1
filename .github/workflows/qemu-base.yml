@@ -39,9 +39,9 @@ jobs:
       - run: cd build
       - name: Configure
         run: if test -n "$TARGETS"; 
-             then \
+             then
                ../configure --enable-werror --disable-docs $CONFIGURE_ARGS --target-list="$TARGETS" ;
-             else \
+             else
                ../configure --enable-werror --disable-docs $CONFIGURE_ARGS ;
              fi || { cat config.log meson-logs/meson-log.txt && exit 1; }
       - name: Run meson configure LD_JOBS

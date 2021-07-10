@@ -34,7 +34,7 @@ PACKAGES=git \
 
 sudo apt-get update && \
     DEBIAN_FRONTEND=noninteractive sudo apt-get -y install --no-install-recommends $PACKAGES
-sudo dpkg -l $PACKAGES | sort > /packages.txt
+# sudo dpkg -l $PACKAGES | sort > /packages.txt
 
 # Apply patch https://reviews.llvm.org/D75820
 # This is required for TSan in clang-10 to compile with QEMU.
