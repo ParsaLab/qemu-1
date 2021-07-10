@@ -16,7 +16,6 @@ jobs:
   native_build_job_definition:
     runs-on: ubuntu-latest
     name: native_build_job_definition
-    description: Builds qemu
     strategy:
       matrix:
         include:
