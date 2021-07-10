@@ -43,7 +43,8 @@ jobs:
                ../configure --enable-werror --disable-docs $CONFIGURE_ARGS --target-list="$TARGETS" ;
              else
                ../configure --enable-werror --disable-docs $CONFIGURE_ARGS ;
-             fi || { cat config.log meson-logs/meson-log.txt && exit 1; }
+             fi 
+            # || { cat config.log meson-logs/meson-log.txt && exit 1; }
       - name: Run meson configure LD_JOBS
         run: if test -n "$LD_JOBS";
              then \
