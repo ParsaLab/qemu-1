@@ -1,7 +1,6 @@
 name: Build and check tests brought by QEMU
 
 on: 
-  workflow_dispatch:
   push:
     branches:
       - master
@@ -10,6 +9,7 @@ on:
     branches:
       - master
       - dev
+  workflow_dispatch:
 
 jobs:
   native_build_job_definition:
