@@ -2,8 +2,6 @@ name: Build and check tests brought by QEMU
 
 on: 
   workflow_dispatch:
-    branches:
-      - dev-migrate-github-actions
   push:
     branches:
       - master
