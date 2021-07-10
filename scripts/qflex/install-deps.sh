@@ -3,6 +3,7 @@
 sudo apt-get update && \
     DEBIAN_FRONTEND=noninteractive sudo apt-get -y install --no-install-recommends \
         git \
+        ninja-build \
         libglib2.0-dev \
         libfdt-dev \
         libpixman-1-dev \
