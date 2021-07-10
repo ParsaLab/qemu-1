@@ -1,14 +1,14 @@
 name: Build and check tests brought by QEMU
 
 on: 
-   push:
-     branches:
-       - master
-       - dev
-   pull_request:
-     branches:
-       - master
-       - dev
+  push:
+    branches:
+      - master
+      - dev
+  pull_request:
+    branches:
+      - master
+      - dev
 
 jobs:
   native_build_job_definition:
