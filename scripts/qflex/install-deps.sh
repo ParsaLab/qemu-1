@@ -22,17 +22,19 @@ sudo apt-get update && \
         librbd-dev \
         librdmacm-dev \
         libsasl2-dev \
-        libsdl1.2-dev \
         libseccomp-dev \
         libsnappy-dev \
         libssh2-1-dev \
-        libvde-dev \
-        libvdeplug-dev \
-        libvte-2.90-dev \
-        libxen-dev \
-        liblzo2-dev \
         libnfs-dev \
         libiscsi-dev
+
+#        libsdl1.2-dev \
+
+#        libvde-dev \
+#        libvdeplug-dev \
+#        libvte-2.91-dev \
+#        libxen-dev \
+#        liblzo2-dev \
 
 # sudo dpkg -l $PACKAGES | sort > /packages.txt
 
