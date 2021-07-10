@@ -26,7 +26,7 @@ jobs:
     env: 
       TARGETS: ${{ matrix.targets }}
       CONFIGURE_ARGS: ${{ matrix.configure-args }}
-      MAKE_CHECK_ARGS: ${{ inputs.make-check-args }}
+      MAKE_CHECK_ARGS: ${{ matrix.make-check-args }}
     steps:
 # Figure out if we do for everytime install deps
 #      - name: Fetch Docker image from QEMU
