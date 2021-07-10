@@ -32,6 +32,8 @@ jobs:
 #      - name: Fetch Docker image from QEMU
 #        uses: docker://registry.gitlab.com/qemu-project/qemu/qemu/ubuntu2004
       - uses: actions/checkout@v2
+        with:
+          submodules: 'true'
       - name: Install depedencies
         run: bash scripts/qflex/install-deps.sh
       - run: JOBS=$(expr $(nproc) + 1)
