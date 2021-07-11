@@ -40,8 +40,8 @@ jobs:
       - name: Install depedencies
         run: bash scripts/qflex/install-deps.sh
       - run: JOBS=$(expr $(nproc) + 1)
-      - run: mkdir build
-      - run: cd build
+      - run: pwd && mkdir build
+      - run: pwd && cd build
       - name: Configure
         run: if test -n "$TARGETS"; 
              then
