@@ -31,9 +31,10 @@ jobs:
 # Figure out if we do for everytime install deps
 #      - name: Fetch Docker image from QEMU
 #        uses: docker://registry.gitlab.com/qemu-project/qemu/qemu/ubuntu2004
-      - uses: actions/checkout@v2
-        with:
-          submodules: 'recursive'
+      - name: Checkout
+        uses: actions/checkout@v2
+      - name: Checkout submodules
+        run: git submodule update --init --recursive 
       - name: Install depedencies
         run: bash scripts/qflex/install-deps.sh
       - run: JOBS=$(expr $(nproc) + 1)
