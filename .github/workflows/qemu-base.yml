@@ -41,7 +41,7 @@ jobs:
         run: bash scripts/qflex/install-deps.sh
       - run: JOBS=$(expr $(nproc) + 1)
       - run: pwd && mkdir build
-      - run: pwd && cd build && pwd
+      - run: pwd && cd build && pwd && pwd .. && ls ../configure
       - name: Configure
         run: if test -n "$TARGETS"; 
              then
