@@ -54,7 +54,7 @@ jobs:
       - name: Make base
         run: make -j$(expr $(nproc) + 1)
       - name: Run checks if required
-        if: ${{ ! -n env.MAKE_CHECK_ARGS }}
+        if: ${{ env.MAKE_CHECK_ARGS }}
         run: make -j"$JOBS" $MAKE_CHECK_ARGS ;
       - name: Save and upload artifact
         uses: actions/upload-artifact@v2
