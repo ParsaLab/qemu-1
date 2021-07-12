@@ -33,10 +33,10 @@ jobs:
 #        uses: docker://registry.gitlab.com/qemu-project/qemu/qemu/ubuntu2004
       - name: Checkout
         uses: actions/checkout@v2
-      - name: Checkout submodules
-        run: git submodule update --init --recursive 
-      - name: Status Submodules
-        run: git submodule status --recursive
+#      - name: Checkout submodules
+#        run: git submodule update --init --recursive 
+#      - name: Status Submodules
+#        run: git submodule status --recursive
       - name: Install depedencies
         run: bash scripts/qflex/install-deps.sh
       - run: JOBS=$(expr $(nproc) + 1)
