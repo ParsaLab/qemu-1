@@ -31,13 +31,12 @@ sudo apt-get update && \
         python3-yaml \
         clang \
         gcc \
-        slirp \
         pkg-config \
         git-core \
         libiscsi-dev
 
 # Install meson as root
-sudo pip uninstall -y meson && sudo pip install meson
+# sudo pip uninstall -y meson && sudo pip install meson
 
 #        libsdl1.2-dev \
 
