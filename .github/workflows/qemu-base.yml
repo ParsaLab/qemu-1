@@ -22,6 +22,7 @@ jobs:
           - build-name: build-system-ubuntu
             targets: aarch64-softmmu
             configure-args: --enable-docs --enable-fdt=system --enable-slirp=system
+#            configure-args: --enable-docs --enable-fdt=system --enable-slirp=system
             make-check-args: check-build
     env: 
       TARGETS: ${{ matrix.targets }}
