@@ -47,7 +47,7 @@ jobs:
                ./configure --enable-werror --disable-docs $CONFIGURE_ARGS ;
              fi || { cd build && cat config.log meson-logs/meson-log.txt && exit 1; }
       - name: Run meson configure LD_JOBS
-        if: [-n "$LD_JOBS"]
+        if: [ -n $LD_JOBS ]
         run: meson configure . -Dbackend_max_links="$LD_JOBS" ;
       - name: Make base
         run: make -j$(expr $(nproc) + 1)
