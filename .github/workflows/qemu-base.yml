@@ -39,8 +39,6 @@ jobs:
         run: git submodule update --init --recursive slirp && git submodule update --remote slirp
       - name: Build and install slirp
         run: cd slirp && meson build && sudo ninja -C build install
-      - run: JOBS=$(expr $(nproc) + 1)
-#      - run: mkdir build
       - name: Configure
         run: if test -n "$TARGETS"; 
              then
@@ -54,12 +52,10 @@ jobs:
                meson configure . -Dbackend_max_links="$LD_JOBS" ;
              fi || exit 1;
       - name: Make base
-        run: make -j"$JOBS"
+        run: make -j$(expr $(nproc) + 1)
       - name: Run checks if required
-        run: if test -n "$MAKE_CHECK_ARGS";
-             then \
-               make -j"$JOBS" $MAKE_CHECK_ARGS ;
-             fi
+        if: [ ! -n $MAKE_CHECK_ARGS ]
+        run: make -j"$JOBS" $MAKE_CHECK_ARGS ;
       - name: Save and upload artifact
         uses: actions/upload-artifact@v2
         with:
