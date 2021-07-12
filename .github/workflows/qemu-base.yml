@@ -86,8 +86,8 @@ jobs:
           name: ${{ matrix.build-name }}
       - run: |
           ls
-          cd build
           cd ${{ matrix.build-name }}
+          ls
       - run: scripts/git-submodule.sh update
              $(sed -n '/GIT_SUBMODULES=/ s/.*=// p' ${{ matrix.build-name }}/config-host.mak)
       - run: find . -type f -exec touch {} +
