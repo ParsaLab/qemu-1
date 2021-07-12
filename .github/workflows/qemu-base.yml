@@ -47,15 +47,13 @@ jobs:
                ./configure --enable-werror --disable-docs $CONFIGURE_ARGS ;
              fi || { cd build && cat config.log meson-logs/meson-log.txt && exit 1; }
       - name: Run meson configure LD_JOBS
-        run: if test -n "$LD_JOBS";
-             then \
-               meson configure . -Dbackend_max_links="$LD_JOBS" ;
-             fi || exit 1;
+        if: [-n "$LD_JOBS"]
+        run: meson configure . -Dbackend_max_links="$LD_JOBS" ;
       - name: Make base
         run: make -j$(expr $(nproc) + 1)
       - name: Run checks if required
         if: [ ! -n $MAKE_CHECK_ARGS ]
-        run: make -j"$JOBS" $MAKE_CHECK_ARGS ;
+        run: make -j$(expr $(nproc) + 1) $MAKE_CHECK_ARGS ;
       - name: Save and upload artifact
         uses: actions/upload-artifact@v2
         with:

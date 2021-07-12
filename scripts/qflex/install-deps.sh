@@ -28,8 +28,7 @@ sudo apt-get update && \
         libssh2-1-dev \
         libnfs-dev \
         python3-sphinx \
-   python3-yaml \
-
+        python3-yaml \
         clang \
         gcc \
         slirp \
