@@ -36,7 +36,7 @@ jobs:
       - name: Install depedencies
         run: bash scripts/qflex/install-deps.sh
       - name: Get slirp submodule
-        run: git submodule update --remote slirp
+        run: git submodule --init slirp && git submodule update --remote slirp
       - name: Build and install slirp
         run: cd slirp && meson build && sudo ninja -C build install
       - run: JOBS=$(expr $(nproc) + 1)
