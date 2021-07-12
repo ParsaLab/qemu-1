@@ -35,7 +35,6 @@ jobs:
         uses: actions/checkout@v2
       - name: Install depedencies
         run: bash scripts/qflex/install-deps.sh
-      - name: Get slirp submodule
       - name: Build and install slirp
         if: contains(matrix.configure-args, 'slirp')
         run: |
