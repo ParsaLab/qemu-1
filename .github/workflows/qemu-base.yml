@@ -36,9 +36,14 @@ jobs:
       - name: Install depedencies
         run: bash scripts/qflex/install-deps.sh
       - name: Get slirp submodule
-        run: git submodule update --init --recursive slirp && git submodule update --remote slirp
       - name: Build and install slirp
-        run: cd slirp && meson build && sudo ninja -C build install
+        if: contains(matrix.configure-args, 'slirp')
+        run: |
+          git submodule update --init --recursive slirp 
+          git submodule update --remote slirp
+          cd slirp 
+          meson build 
+          sudo ninja -C build install
       - name: Configure
         run: if test -n "$TARGETS"; 
              then
@@ -48,14 +53,14 @@ jobs:
              fi || { cd build && cat config.log meson-logs/meson-log.txt && exit 1; }
       - name: Run meson configure LD_JOBS
         run: if test -n "$LD_JOBS";
-             then \
+             then
                meson configure . -Dbackend_max_links="$LD_JOBS" ;
              fi || exit 1;
       - name: Make base
         run: make -j$(expr $(nproc) + 1)
       - name: Run checks if required
         if: ${{ env.MAKE_CHECK_ARGS }}
-        run: make -j"$JOBS" $MAKE_CHECK_ARGS ;
+        run: make -j$(expr $(nproc) + 1) $MAKE_CHECK_ARGS ;
       - name: Save and upload artifact
         uses: actions/upload-artifact@v2
         with:
@@ -80,8 +85,12 @@ jobs:
         uses: actions/download-artifact@v2
         with:
           name: ${{ matrix.build-name }}
+      - run: |
+          ls
+          cd build
+          cd ${{ matrix.build-name }}
       - run: scripts/git-submodule.sh update
-             $(sed -n '/GIT_SUBMODULES=/ s/.*=// p' build/config-host.mak)
+             $(sed -n '/GIT_SUBMODULES=/ s/.*=// p' ${{ matrix.build-name }}/config-host.mak)
       - run: find . -type f -exec touch {} +
         working-directory: ${{ matrix.build-name }}
       # Avoid recompiling by hiding ninja with NINJA=":"
