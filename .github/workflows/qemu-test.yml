@@ -1,0 +1,39 @@
+name: Build and check tests brought by QEMU
+
+on: 
+  push:
+    branches:
+      - master
+      - dev
+      - dev-migrate-github-actions
+  pull_request:
+    branches:
+      - master
+      - dev
+  workflow_dispatch:
+
+jobs:
+  native_test_job_template:
+    runs-on: ubuntu-latest
+    name: Runs basic tests for Ubuntu
+    needs: native_build_job_definition
+    strategy:
+      matrix:
+        include:
+          - make-check-args: check
+            build-name: build-system-ubuntu
+    env: 
+        MAKE_CHECK_ARGS: ${{ matrix.make-check-args }}
+    steps:
+      - uses: actions/checkout@v2
+      - name: Download artifact from build
+        uses: actions/download-artifact@v2
+        with:
+          name: ${{ matrix.build-name }}
+      - run: scripts/git-submodule.sh update
+             $(sed -n '/GIT_SUBMODULES=/ s/.*=// p' build/config-host.mak)
+      - run: cd ${{ matrix.build-name }}
+      - run: find . -type f -exec touch {} +
+      # Avoid recompiling by hiding ninja with NINJA=":"
+      - name: Launch check tests
+        run: make NINJA=":" $MAKE_CHECK_ARGS
