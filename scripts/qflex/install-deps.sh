@@ -28,12 +28,14 @@ sudo apt-get update && \
         libssh2-1-dev \
         libnfs-dev \
         clang \
-        meson \
         gcc \
+        slirp \
         pkg-config \
-        git-core
-
+        git-core \
         libiscsi-dev
+
+# Install meson as root
+sudo pip uninstall -y meson && sudo pip install meson
 
 #        libsdl1.2-dev \
 

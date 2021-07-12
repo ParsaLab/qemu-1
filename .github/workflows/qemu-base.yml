@@ -33,12 +33,12 @@ jobs:
 #        uses: docker://registry.gitlab.com/qemu-project/qemu/qemu/ubuntu2004
       - name: Checkout
         uses: actions/checkout@v2
-#      - name: Checkout submodules
-#        run: git submodule update --init --recursive 
-#      - name: Status Submodules
-#        run: git submodule status --recursive
       - name: Install depedencies
         run: bash scripts/qflex/install-deps.sh
+      - name: Get slirp submodule
+        run: git submodule update --remote slirp
+      - name: Build and install slirp
+        run: cd slirp && meson build && sudo ninja -C build install
       - run: JOBS=$(expr $(nproc) + 1)
 #      - run: mkdir build
       - name: Configure
