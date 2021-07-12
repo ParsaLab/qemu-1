@@ -82,8 +82,10 @@ jobs:
           name: ${{ matrix.build-name }}
       - run: scripts/git-submodule.sh update
              $(sed -n '/GIT_SUBMODULES=/ s/.*=// p' build/config-host.mak)
-      - run: cd build
       - run: find . -type f -exec touch {} +
+        working-directory: ${{ matrix.build-name }}
       # Avoid recompiling by hiding ninja with NINJA=":"
       - name: Launch check tests
         run: make NINJA=":" $MAKE_CHECK_ARGS
+        working-directory: ${{ matrix.build-name }}
+ 
