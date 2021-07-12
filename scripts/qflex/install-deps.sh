@@ -27,6 +27,12 @@ sudo apt-get update && \
         libsnappy-dev \
         libssh2-1-dev \
         libnfs-dev \
+        clang \
+        meson \
+        gcc \
+        pkg-config \
+        git-core
+
         libiscsi-dev
 
 #        libsdl1.2-dev \
