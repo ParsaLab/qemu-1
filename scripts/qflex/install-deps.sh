@@ -27,6 +27,7 @@ sudo apt-get update && \
         libsnappy-dev \
         libssh2-1-dev \
         libnfs-dev \
+        python3-sphinx \
         clang \
         gcc \
         slirp \
