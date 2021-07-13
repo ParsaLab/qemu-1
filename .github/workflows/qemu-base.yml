@@ -22,7 +22,8 @@ jobs:
           - build-name: build-system-ubuntu
             targets: aarch64-softmmu
 #            configure-args: --enable-docs --enable-fdt=system --enable-slirp=system
-            make-check-args: check-build
+            make-check-args: check-build check
+            upload: 'false'
     env: 
       TARGETS: ${{ matrix.targets }}
       CONFIGURE_ARGS: ${{ matrix.configure-args }}
@@ -62,35 +63,36 @@ jobs:
         run: make -j$(expr $(nproc) + 1) $MAKE_CHECK_ARGS ;
       - name: Save and upload artifact, build folder
         uses: actions/upload-artifact@v2
+        if: ${{ matrix.upload == 'true'}}
         with:
           retention-days: 2
           name: ${{ matrix.build-name }}
           path: build
 
-  native_test_job_template:
-    runs-on: ubuntu-latest
-    name: Runs basic tests for Ubuntu
-    needs: native_build_job_definition
-    strategy:
-      matrix:
-        include:
-          - build-name: build-system-ubuntu
-            make-check-args: check
-    env: 
-        MAKE_CHECK_ARGS: ${{ matrix.make-check-args }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v2
-      - name: Download artifact from build
-        uses: actions/download-artifact@v2
-        with:
-          name: ${{ matrix.build-name }}
-          path: build
-      - run: scripts/git-submodule.sh update
-             $(sed -n '/GIT_SUBMODULES=/ s/.*=// p' build/config-host.mak)
-      - run: find . -type f -exec touch {} +
-        working-directory: build
-      # Avoid recompiling by hiding ninja with NINJA=":"
-      - name: Launch check tests
-        run: sudo make NINJA=":" $MAKE_CHECK_ARGS
-        working-directory: build
+#  native_test_job_template:
+#    runs-on: ubuntu-latest
+#    name: Runs basic tests for Ubuntu
+#    needs: native_build_job_definition
+#    strategy:
+#      matrix:
+#        include:
+#          - build-name: build-system-ubuntu
+#            make-check-args: check
+#    env: 
+#        MAKE_CHECK_ARGS: ${{ matrix.make-check-args }}
+#    steps:
+#      - name: Checkout
+#        uses: actions/checkout@v2
+#      - name: Download artifact from build
+#        uses: actions/download-artifact@v2
+#        with:
+#          name: ${{ matrix.build-name }}
+#          path: build
+#      - run: scripts/git-submodule.sh update
+#             $(sed -n '/GIT_SUBMODULES=/ s/.*=// p' build/config-host.mak)
+#      - run: find . -type f -exec touch {} +
+#        working-directory: build
+#      # Avoid recompiling by hiding ninja with NINJA=":"
+#      - name: Launch check tests
+#        run: sudo make NINJA=":" $MAKE_CHECK_ARGS
+#        working-directory: build
