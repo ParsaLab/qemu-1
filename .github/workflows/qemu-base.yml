@@ -22,8 +22,81 @@ jobs:
           - build-name: build-system-ubuntu
             targets: aarch64-softmmu
 #            configure-args: --enable-docs --enable-fdt=system --enable-slirp=system
-            make-check-args: check-build check
-            upload: 'false'
+            make-check-args: check
+            upload-build: 'false'
+          - build-name: build-disabled
+            targets: aarch64-softmmu
+            make-check-args: check-qtest SPEED=slow
+            configure-args: 
+              --disable-attr
+              --disable-auth-pam
+              --disable-avx2
+              --disable-bochs
+              --disable-brlapi
+              --disable-bzip2
+              --disable-cap-ng
+              --disable-capstone
+              --disable-cloop
+              --disable-coroutine-pool
+              --disable-curl
+              --disable-curses
+              --disable-dmg
+              --disable-docs
+              --disable-gcrypt
+              --disable-glusterfs
+              --disable-gnutls
+              --disable-gtk
+              --disable-guest-agent
+              --disable-iconv
+              --disable-keyring
+              --disable-kvm
+              --disable-libiscsi
+              --disable-libpmem
+              --disable-libssh
+              --disable-libudev
+              --disable-libusb
+              --disable-libxml2
+              --disable-linux-aio
+              --disable-live-block-migration
+              --disable-lzo
+              --disable-malloc-trim
+              --disable-mpath
+              --disable-nettle
+              --disable-numa
+              --disable-opengl
+              --disable-parallels
+              --disable-pie
+              --disable-qcow1
+              --disable-qed
+              --disable-qom-cast-debug
+              --disable-rbd
+              --disable-rdma
+              --disable-replication
+              --disable-sdl
+              --disable-seccomp
+              --disable-sheepdog
+              --disable-slirp
+              --disable-smartcard
+              --disable-snappy
+              --disable-sparse
+              --disable-spice
+              --disable-strip
+              --disable-tpm
+              --disable-usb-redir
+              --disable-vdi
+              --disable-vhost-crypto
+              --disable-vhost-net
+              --disable-vhost-scsi
+              --disable-vhost-kernel
+              --disable-vhost-user
+              --disable-vhost-vdpa
+              --disable-vhost-vsock
+              --disable-virglrenderer
+              --disable-vnc
+              --disable-vte
+              --disable-vvfat
+              --disable-xen
+              --disable-zstd
     env: 
       TARGETS: ${{ matrix.targets }}
       CONFIGURE_ARGS: ${{ matrix.configure-args }}
@@ -58,16 +131,21 @@ jobs:
              fi || exit 1;
       - name: Make base
         run: make -j$(expr $(nproc) + 1)
+      - name: Run check-build
+        run: make -j$(expr $(nproc) + 1) check-build ;
       - name: Run checks if required
         if: ${{ env.MAKE_CHECK_ARGS }}
         run: make -j$(expr $(nproc) + 1) $MAKE_CHECK_ARGS ;
+      - name: Tar artifact
+        if: ${{ matrix.upload-build == 'true'}}
+        run: tar -cvf build.tar build
       - name: Save and upload artifact, build folder
         uses: actions/upload-artifact@v2
-        if: ${{ matrix.upload == 'true'}}
+        if: ${{ matrix.upload-build == 'true'}}
         with:
           retention-days: 2
           name: ${{ matrix.build-name }}
-          path: build
+          path: build.tar
 
 #  native_test_job_template:
 #    runs-on: ubuntu-latest
@@ -96,3 +174,71 @@ jobs:
 #      - name: Launch check tests
 #        run: sudo make NINJA=":" $MAKE_CHECK_ARGS
 #        working-directory: build
+
+#  acceptance_definition:
+#    runs-on: ubuntu-latest
+#    name: acceptance_definition
+#    strategy:
+#      matrix:
+#        include:
+#          - build-name: acceptance-system-ubuntu
+#            targets: aarch64-softmmu
+#            make-check-args: check-acceptance
+#            upload-results: 'true'
+#    env: 
+#      TARGETS: ${{ matrix.targets }}
+#      CONFIGURE_ARGS: ${{ matrix.configure-args }}
+#      MAKE_CHECK_ARGS: ${{ matrix.make-check-args }}
+#      CI_PROJECT_DIR: ${{ matrix.build-name }}-acceptance
+#    steps:
+#      - name: Checkout
+#        uses: actions/checkout@v2
+#      - name: Install depedencies
+#        run: bash scripts/qflex/install-deps.sh
+#  # before script steps
+#      - run: |
+#          mkdir -p ~/.config/avocado
+#          echo "[datadir.paths]" > ~/.config/avocado/avocado.conf
+#          echo "cache_dirs = ['${CI_PROJECT_DIR}/avocado-cache']" \
+#               >> ~/.config/avocado/avocado.conf
+#          echo -e '[job.output.testlogs]\nstatuses = ["FAIL", "INTERRUPT"]' \
+#               >> ~/.config/avocado/avocado.conf
+#          if [ -d ${CI_PROJECT_DIR}/avocado-cache ]; then \
+#            du -chs ${CI_PROJECT_DIR}/avocado-cache ; \
+#          fi
+#          export AVOCADO_ALLOW_UNTRUSTED_CODE=1
+#  # Do same routine as in build
+#      - name: Configure
+#        run: if test -n "$TARGETS"; 
+#             then
+#               ./configure --enable-werror --disable-docs $CONFIGURE_ARGS --target-list="$TARGETS" ;
+#             else
+#               ./configure --enable-werror --disable-docs $CONFIGURE_ARGS ;
+#             fi || { cd build && cat config.log meson-logs/meson-log.txt && exit 1; }
+#      - name: Run meson configure LD_JOBS
+#        run: if test -n "$LD_JOBS";
+#             then
+#               meson configure . -Dbackend_max_links="$LD_JOBS" ;
+#             fi || exit 1;
+#      - name: Make base
+#        run: make -j$(expr $(nproc) + 1)
+#      - name: Run check-build
+#        run: make -j$(expr $(nproc) + 1) check-build ;
+#      - name: Run checks if required
+#        if: ${{ env.MAKE_CHECK_ARGS }}
+#        run: make -j$(expr $(nproc) + 1) $MAKE_CHECK_ARGS ;
+#      # after script
+#      - run: |
+#          cd build
+#          du -chs ${CI_PROJECT_DIR}/avocado-cache
+#      # upload artifacts
+#      - name: Save and upload artifact, build folder
+#        uses: actions/upload-artifact@v2
+#        if: ${{ matrix.upload-results == 'true' }}
+#        with:
+#          retention-days: 2
+#          name: ${{ matrix.build-name }}-artifacts
+#          path: |
+#            build/tests/results/latest/results.xml
+#            build/tests/results/latest/test-results
+ 
