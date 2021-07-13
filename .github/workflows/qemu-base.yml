@@ -31,7 +31,6 @@ jobs:
             targets: aarch64-linux-user
             configure-args: --disable-tools --disable-system --enable-plugins --enable-debug-tcg
             make-check-args: check-tcg
-            timeout: 90
           - build-name: build-some-softmmu-plugins
             targets: aarch64-softmmu
             configure-args: --disable-tools --disable-user --enable-plugins --enable-debug-tcg
@@ -114,7 +113,7 @@ jobs:
               --disable-vvfat
               --disable-xen
               --disable-zstd
-    timeout-minutes: ${{ matrix.timeout }}
+    timeout-minutes: 90
     env: 
       TARGETS: ${{ matrix.targets }}
       CONFIGURE_ARGS: ${{ matrix.configure-args }}
