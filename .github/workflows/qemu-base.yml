@@ -79,7 +79,8 @@ jobs:
     env: 
         MAKE_CHECK_ARGS: ${{ matrix.make-check-args }}
     steps:
-      - uses: actions/checkout@v2
+      - name: Checkout
+        uses: actions/checkout@v2
       - name: Download artifact from build
         uses: actions/download-artifact@v2
         with:
@@ -88,8 +89,8 @@ jobs:
       - run: scripts/git-submodule.sh update
              $(sed -n '/GIT_SUBMODULES=/ s/.*=// p' build/config-host.mak)
       - run: find . -type f -exec touch {} +
-        working-directory: build
+#        working-directory: build
       # Avoid recompiling by hiding ninja with NINJA=":"
       - name: Launch check tests
         run: make NINJA=":" $MAKE_CHECK_ARGS
-        working-directory: build
+#        working-directory: build
