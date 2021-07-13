@@ -23,7 +23,24 @@ jobs:
             targets: aarch64-softmmu
 #            configure-args: --enable-docs --enable-fdt=system --enable-slirp=system
             make-check-args: check
-            upload-build: 'false'
+          - build-name: build-some-softmmu
+            targets: aarch64-softmmu
+            configure-args: --disable-tools --enable-debug
+            make-check-args: check-tcg
+          - build-name: build-user-plugins
+            targets: aarch64-linux-user
+            configure-args: --disable-tools --disable-system --enable-plugins --enable-debug-tcg
+            make-check-args: check-tcg
+            timeout: 90
+          - build-name: build-some-softmmu-plugins
+            targets: aarch64-softmmu
+            configure-args: --disable-tools --disable-user --enable-plugins --enable-debug-tcg
+            make-check-args: check-tcg
+          - build-name: clang-system
+            targets: aarch64-softmmu
+            configure-args: --cc=clang --cxx=clang++
+              --extra-cflags=-fsanitize=undefined --extra-cflags=-fno-sanitize-recover=undefined
+            make-check-args: check-qtest check-tcg
           - build-name: build-disabled
             targets: aarch64-softmmu
             make-check-args: check-qtest SPEED=slow
@@ -97,6 +114,7 @@ jobs:
               --disable-vvfat
               --disable-xen
               --disable-zstd
+    timeout-minutes: ${{ matrix.timeout }}
     env: 
       TARGETS: ${{ matrix.targets }}
       CONFIGURE_ARGS: ${{ matrix.configure-args }}
